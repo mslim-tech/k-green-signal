@@ -48,6 +48,11 @@
 - [x] 8. 통합 RAG Q&A — Baseline(문서 통째 프롬프트) 제거, 단일 Q&A. `answer.py`에 단계별 소요시간(검색/생성)+`RAG_FAKE_LLM` 스텁. 답변에 `[출처:` 인용 + 처리시간 표시(E2E 통과).
 - [x] 9. 전체 E2E 7 passed(smoke·stepper·ingest·rag) → 문서 갱신 → 커밋·푸시.
 
+### 6.5 리랭커(검색 정확도 개선, 2026-06-26)
+- `retriever.py`: 벡터로 후보 넓게(fetch_k=k*4) 뽑고 `RERANKER_MODEL`(gpt-5.4-mini, listwise 1회 호출)로 질문 관련도 재정렬 → 상위 k. `RAG_FAKE_LLM`이면 생략. `search(rerank=True)` 기본.
+- 검증: "2023 확대희망 1위?" 질의에서 정답 청크 `친환경제품_확대희망품목`가 **벡터 5위 → 리랭크 1위**로 상승. answer.py 자동 반영(인용 정확). E2E 7 passed(fake는 rerank 생략, 회귀 없음).
+- 관찰(후속): LLM이 '1위=최대 수치'로 해석해 집계항목(기타/없음/무응답)을 포함 → 순위 질문 시 집계항목 제외하도록 answer 프롬프트 보강 필요(별도).
+
 ### 결과
 - 가이드 스텝퍼 + 검증/로깅 하네스 완성. `uv run pytest tests/e2e` 7 passed(RAG_FAKE_LLM 결정적).
 - 사용자 요구 충족: 업로드 상태/다음단계 안내, 🩺 시스템 로그 가시화, 인제스트 진행/단계 소요시간, 답변 지연 원인(검색 vs 생성) 표시, 문서Q&A·데이터질의 통합, 엄격 준비 게이트.
