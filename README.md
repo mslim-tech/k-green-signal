@@ -1,11 +1,6 @@
 # 대한민국 친환경 소비 인지도 실시간 신호등
 
-**k-green-signal** — 매년 발간되는 「친환경 생활·소비 국민 인지도 조사」 결과보고서(PDF)를 **근거 기반(grounded) 정형 데이터셋**으로 통합하고, 그 위에서 친환경 소비 인지도의 변화를 **신호등처럼** 읽어내는 것을 목표로 합니다.
-
-![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
-![OpenAI](https://img.shields.io/badge/OpenAI-gpt--5.4--mini-412991?logo=openai&logoColor=white)
-![Streamlit](https://img.shields.io/badge/Streamlit-app-FF4B4B?logo=streamlit&logoColor=white)
-![Chroma](https://img.shields.io/badge/VectorDB-Chroma-5A67D8)
+**k-green-signal** — 매년 발간되는 「친환경 생활·소비 국민 인지도 조사」 결과보고서(PDF)를 **근거 기반(grounded) 정형 데이터셋**으로 통합하고, 그 위에서 친환경 소비 인지도의 변화를 **신호등처럼** 읽어내는 것을 목표로 합니다. (기술 스택 배지는 하단 참고)
 
 ---
 
@@ -65,7 +60,6 @@ flowchart TD
 ```
 
 > **실선** = 확정 데이터 흐름 · **점선** = 검토(추측 격리) 흐름 · **보라(점선 테두리)** = 6단계 RAG(예정).
-> 핵심: 비전·휴리스틱 결과는 곧장 정형 DB에 들어가지 않고 **검토 큐 → 사람 확정 → corrections** 를 거친다.
 
 ---
 
@@ -81,7 +75,7 @@ flowchart TD
 | **2v. 비전 추출** | `rag/extract_vision.py` | **표가 깨진 블록은 페이지 이미지를 멀티모달로 판독** | ✅ |
 | **3. 표준화** | `rag/standardize.py` | 연도별 문항을 표준 문항 ID로 통합 → Long CSV | ✅ |
 | **4. 정제·통합** | `rag/refine·dedup·flags·review.py` | 라벨 표준화·중복 분리·의심값 플래그·검수 큐 | ✅ |
-| **5. 검수 UI** | `app.py` + `rag/corrections.py` | 저신뢰 행을 사람이 원문과 대조·수정 → `corrections.jsonl` | ✅ |
+| **5. 검수 UI** | `app.py` + `rag/corrections.py` | 저신뢰 행을 사람이 원문과 대조·수정 → `corrections.jsonl` (다중 파일 업로드 지원) | ✅ |
 | **6. RAG 검색** | `rag/chunking·index·retriever·answer.py` | 정형 데이터 위 **근거 인용 질의응답** | ⏳ |
 
 > 단계별 세부 체크리스트는 [`plan.md`](./plan.md) 참고.
@@ -90,8 +84,7 @@ flowchart TD
 보고서의 표는 2단(좌우) 배치가 많아, `PyMuPDF` 텍스트 추출로 펼치면 **열이 뒤섞이고
 라벨–값이 분리**됩니다(빈칸·오정렬·행 누락). 그래서 표 블록은 **페이지를 이미지로 렌더링해
 멀티모달 모델로 판독**합니다 — Claude/Gemini가 PDF를 비전으로 읽는 방식의 경량판.
-단, 비전 결과도 **자동 반영하지 않고 검토 후보(`outputs/vision_candidates.csv`)로만** 두어
-사람이 확정합니다(설계 원칙).
+(결과는 `outputs/vision_candidates.csv`로만 — 위 설계 원칙대로 검토 후 확정)
 
 ---
 
@@ -178,11 +171,4 @@ uv run streamlit run app.py
 ![tiktoken](https://img.shields.io/badge/tiktoken-tokenizer-555555)
 ![python-dotenv](https://img.shields.io/badge/python--dotenv-env-ECD53F?logoColor=black)
 
----
-
-## 진행 상황
-
-- ✅ 0~4단계 (3개년 정형 데이터셋 + 라벨 표준화·중복 분리·의심값 플래그·검수 큐)
-- ✅ 5단계 검수 UI (`app.py` 검수 탭 + `corrections.jsonl`) · 다중 파일 업로드
-- ✅ 비전 추출(`extract_vision.py`)로 깨진 표 복원 — 검토 후보로 라우팅
-- ⏳ 6단계 RAG: 청킹 → Chroma 인덱싱 → 검색 → **근거 인용 답변** ([`ARCHITECTURE.md`](./ARCHITECTURE.md))
+> **진행 상황**은 위 [파이프라인](#파이프라인-pipeline) 표의 상태(✅/⏳)와 [`plan.md`](./plan.md)를 참고하세요.
