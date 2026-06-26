@@ -388,132 +388,257 @@ def render_rag_tab():
 
 
 # -----------------------------------------------------------------------------
-# 5) 문서 Q&A 탭 (기존 Baseline)
+# 5) 가이드 스텝퍼 — 업로드 → 인제스트 → 검수 → 인덱싱 → 질의(Q&A)
+#    탭 대신 '순서가 있는 단계'로 안내한다. 각 단계는 앞 단계가 끝나야 열린다.
 # -----------------------------------------------------------------------------
-def render_qa_tab(client):
-    st.subheader("📄 문서 Q&A (Baseline)")
-    st.caption("문서를 업로드하고 질문하면, 문서 내용을 바탕으로 답해드립니다.")
+DATA_DIR = Path("data")
 
-    # --- 대화 기록 저장소 준비 (세션 상태) ---
-    if "messages" not in st.session_state:
-        st.session_state.messages = []   # [{"role": "user"/"assistant", "content": "..."}]
-    if "document_text" not in st.session_state:
-        st.session_state.document_text = None
+NO_KEY_MSG = (
+    "OPENAI_API_KEY 를 찾을 수 없습니다.\n\n"
+    "프로젝트 폴더에 `.env` 파일을 만들고 `OPENAI_API_KEY=sk-...` 한 줄을 넣어주세요."
+)
 
-    # --- 사이드바: 파일 업로드 (여러 개 가능) ---
+# (번호, 라벨, 키) — 화면 순서
+STEPS = [
+    (1, "📤 업로드", "upload"),
+    (2, "⚙️ 인제스트", "ingest"),
+    (3, "🔍 검수", "review"),
+    (4, "📚 인덱싱", "index"),
+    (5, "💬 질의(Q&A)", "qa"),
+]
+# 임베딩/추출/답변에 API Key 가 필요한 단계
+STEPS_NEED_KEY = {2, 4, 5}
+
+
+def _data_pdfs() -> list[Path]:
+    return sorted(DATA_DIR.glob("*.pdf")) if DATA_DIR.exists() else []
+
+
+def _index_count() -> int:
+    """ 현재 Chroma 인덱스의 청크 수(없으면 0). """
+    try:
+        from rag.index import get_collection
+        return get_collection().count()
+    except Exception:
+        return 0
+
+
+def _review_remaining_high() -> int:
+    """ 검수 큐에서 아직 사람이 확정하지 않은 high 우선순위 행 수. """
+    q = load_review_queue() or []
+    reviewed = corrections.reviewed_keys()
+    return sum(1 for r in q
+               if (r.get("review_priority") == "high"
+                   and corrections.row_key(r) not in reviewed))
+
+
+def build_ctx() -> dict:
+    """ 단계 게이트/상태 패널이 쓰는 현재 데이터 상태. """
+    return {
+        "pdf_count": len(_data_pdfs()),
+        "review_queue": REVIEW_QUEUE_PATH.exists(),
+        "remaining_high": _review_remaining_high() if REVIEW_QUEUE_PATH.exists() else 0,
+        "index_count": _index_count(),
+    }
+
+
+def can_enter(step_no: int, ctx: dict) -> bool:
+    """ 이 단계에 들어갈 수 있는가(앞 단계 산출물이 준비됐는가). """
+    if step_no == 1:
+        return True
+    if step_no == 2:
+        return ctx["pdf_count"] > 0          # 업로드된 PDF 가 있어야 인제스트
+    if step_no in (3, 4):
+        return ctx["review_queue"]           # 인제스트 산출(검수 큐)이 있어야
+    if step_no == 5:
+        return ctx["index_count"] > 0        # 인덱스가 있어야 질의
+    return False
+
+
+def _is_done(step_no: int, ctx: dict) -> bool:
+    if step_no == 1:
+        return ctx["pdf_count"] > 0
+    if step_no == 2:
+        return ctx["review_queue"]
+    if step_no == 3:
+        return ctx["review_queue"] and ctx["remaining_high"] == 0
+    if step_no == 4:
+        return ctx["index_count"] > 0
+    return False
+
+
+def _step_state(step_no: int, ctx: dict, current: int) -> str:
+    if step_no == current:
+        return "current"
+    if _is_done(step_no, ctx):
+        return "done"
+    if can_enter(step_no, ctx):
+        return "open"
+    return "locked"
+
+
+# -----------------------------------------------------------------------------
+# 스텝퍼 헤더(네비) + 상태 패널 + 시스템 로그 패널
+# -----------------------------------------------------------------------------
+def render_stepper_nav(ctx: dict, current: int) -> None:
+    cols = st.columns(len(STEPS))
+    icon = {"current": "▶", "done": "✅", "open": "○", "locked": "🔒"}
+    for col, (no, label, _key) in zip(cols, STEPS):
+        with col:
+            state = _step_state(no, ctx, current)
+            # Playwright/검증용 상태 센티넬
+            st.markdown(
+                f"<span data-testid='step{no}-status' style='display:none'>{state}</span>",
+                unsafe_allow_html=True,
+            )
+            if st.button(f"{icon[state]} {no}. {label}", key=f"nav_{no}",
+                         disabled=(state == "locked"), use_container_width=True):
+                st.session_state.step = no
+                st.rerun()
+
+
+def render_status_panel(ctx: dict) -> None:
     with st.sidebar:
-        st.header("📁 문서 업로드")
-        uploaded_files = st.file_uploader(
-            "PDF, TXT, DOCX 파일을 올려주세요. (여러 개 선택 가능)",
-            type=["pdf", "txt", "docx"],
-            accept_multiple_files=True,
-        )
-
-        if uploaded_files:
-            # 여러 파일의 텍스트를 각각 추출해, 파일 경계를 표시하며 하나로 합친다.
-            combined_parts = []
-            ok_count = 0
-            for uf in uploaded_files:
-                text, error_message = extract_text(uf)
-                ext = uf.name.rsplit(".", 1)[-1].upper() if "." in uf.name else "?"
-                if error_message:
-                    st.error(f"❌ {uf.name}: {error_message}")
-                    continue
-                # 모델이 어느 문서에서 온 내용인지 알 수 있도록 경계를 넣는다.
-                combined_parts.append(f"[문서 시작: {uf.name}]\n{text}\n[문서 끝: {uf.name}]")
-                ok_count += 1
-                st.write(f"✅ **{uf.name}** ({ext}, {len(text):,}자)")
-
-            if combined_parts:
-                st.session_state.document_text = "\n\n".join(combined_parts)
-                st.success(
-                    f"문서 {ok_count}개를 읽었습니다. "
-                    f"(합계 {len(st.session_state.document_text):,}자)"
-                )
-            else:
-                st.session_state.document_text = None
-
-    # --- 메인: 기존 대화 다시 보여주기 ---
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # --- 메인: 질문 입력 받기 ---
-    question = st.chat_input("문서에 대해 질문해보세요.")
-    if question:
-        # 사용자 질문을 화면에 표시하고 기록에 저장
-        with st.chat_message("user"):
-            st.markdown(question)
-        st.session_state.messages.append({"role": "user", "content": question})
-
-        # 문서가 없으면 OpenAI 를 호출하지 않고 안내만 한다.
-        if not st.session_state.document_text:
-            answer = "먼저 문서를 업로드해주세요."
-            with st.chat_message("assistant"):
-                st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+        st.header("📊 데이터 상태")
+        st.metric("업로드된 PDF", ctx["pdf_count"])
+        st.metric("인덱싱된 청크", ctx["index_count"])
+        st.metric("검수 남은 high", ctx["remaining_high"])
+        st.divider()
+        # 다음 할 일 안내
+        if ctx["pdf_count"] == 0:
+            nxt = "1단계에서 보고서 PDF를 업로드하세요."
+        elif not ctx["review_queue"]:
+            nxt = "2단계에서 인제스트를 실행하세요."
+        elif ctx["remaining_high"] > 0:
+            nxt = f"3단계에서 high {ctx['remaining_high']}건을 검수하세요."
+        elif ctx["index_count"] == 0:
+            nxt = "4단계에서 인덱싱하세요."
         else:
-            # 문서가 있으면 OpenAI 에게 답변을 요청한다.
-            with st.chat_message("assistant"):
-                with st.spinner("답변을 생성하고 있습니다..."):
-                    try:
-                        answer = ask_openai(
-                            client,
-                            st.session_state.document_text,
-                            question,
-                        )
-                    except Exception as error:
-                        # 문서가 너무 길어 한도를 넘거나, 네트워크/인증 문제일 수 있다.
-                        answer = (
-                            "답변을 생성하는 중 오류가 발생했습니다. "
-                            "문서가 너무 길거나 네트워크/API Key 에 문제가 있을 수 있습니다. "
-                            "잠시 후 다시 시도해주세요.\n\n"
-                            f"(상세: {error})"
-                        )
-                st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+            nxt = "5단계에서 질문하세요. (준비 완료)"
+        st.info(f"👉 다음 할 일: {nxt}")
+
+
+def render_log_panel() -> None:
+    st.divider()
+    with st.expander("🩺 시스템 로그 (앱)", expanded=False):
+        lf = st.session_state.get("logfile")
+        if lf and Path(lf).exists():
+            tail = "\n".join(
+                Path(lf).read_text(encoding="utf-8", errors="replace").splitlines()[-40:]
+            )
+            st.code(tail or "(로그 비어 있음)", language="log")
+            st.caption(f"파일: {lf}")
+        else:
+            st.caption("로그 파일이 아직 없습니다.")
 
 
 # -----------------------------------------------------------------------------
-# 6) 진입점: 탭 2개로 화면을 나눈다.
+# 단계별 화면
+# -----------------------------------------------------------------------------
+def render_step_upload(ctx: dict) -> None:
+    st.subheader("📤 1단계 · 보고서 업로드")
+    st.caption("분석할 인지도 조사 PDF를 올리면 `data/` 에 저장되고, 다음 단계(인제스트)의 입력이 됩니다.")
+
+    up = st.file_uploader("PDF 업로드", type=["pdf"], accept_multiple_files=False)
+    if up is not None:
+        dest = DATA_DIR / up.name
+        st.write(f"선택한 파일: **{up.name}** ({len(up.getvalue()):,} bytes)")
+        if st.button(f"💾 data/ 에 저장", key="save_pdf"):
+            DATA_DIR.mkdir(exist_ok=True)
+            dest.write_bytes(up.getvalue())
+            # 페이지 수 표시(검증/안내용)
+            try:
+                pages = len(pypdf.PdfReader(io.BytesIO(up.getvalue())).pages)
+            except Exception:
+                pages = "?"
+            log.info("업로드 저장: %s (%s pages)", up.name, pages)
+            st.success(f"✅ 저장했습니다: data/{up.name} (페이지 {pages}). 2단계(인제스트)로 진행하세요.")
+            st.rerun()
+
+    st.markdown("**현재 `data/` 의 PDF:**")
+    pdfs = _data_pdfs()
+    if pdfs:
+        for p in pdfs:
+            st.write(f"- {p.name} ({p.stat().st_size:,} bytes)")
+    else:
+        st.caption("아직 없습니다.")
+
+
+def render_step_ingest(ctx: dict) -> None:
+    st.subheader("⚙️ 2단계 · 인제스트 (추출 → 표준화 → 정제 → 검수 큐)")
+    st.caption(
+        "업로드한 PDF에서 수치를 추출하고 표준화·정제해 검수 큐까지 만듭니다. "
+        "⚠️ 표준화는 `outputs/*.extracted.jsonl` 전체를 다시 처리하므로 여러 연도가 있으면 시간이 걸립니다."
+    )
+    st.info("이 단계의 **실시간 진행/로그 연결은 다음 증분(6)**에서 붙입니다. "
+            "현재는 산출물(검수 큐)이 있으면 3·4단계로 진행할 수 있습니다.")
+    st.write(f"검수 큐 존재: {'예' if ctx['review_queue'] else '아니오'}")
+
+
+def render_step_index(ctx: dict) -> None:
+    st.subheader("📚 4단계 · 인덱싱 (준비 게이트)")
+    st.caption("아래 준비 게이트를 통과해야 인덱싱할 수 있습니다. (추측은 데이터가 아니다 — 확정 사실만 인덱싱)")
+    try:
+        from rag.validate import validate_ready
+        rep = validate_ready(strict=True)
+    except Exception as error:
+        st.error(f"준비 점검 실패: {error}")
+        return
+
+    if rep.ok:
+        st.success(f"✅ {rep.summary}")
+    else:
+        st.error(f"⛔ {rep.summary}")
+        for c in rep.blocking:
+            with st.expander(f"⛔ {c.label}: {c.count}건"):
+                for it in c.items:
+                    st.write(f"- {it}")
+                st.caption(f"↳ {c.fix_hint}")
+
+    # 실제 인덱싱 실행은 다음 증분(7)에서 연결. 지금은 게이트로 버튼 활성/비활성만.
+    st.button("📚 인덱싱 실행", disabled=not rep.ok, key="run_index",
+              help=None if rep.ok else "준비 게이트를 통과해야 활성화됩니다.")
+    st.write(f"현재 인덱스 청크: {ctx['index_count']}")
+
+
+# -----------------------------------------------------------------------------
+# 6) 진입점: 가이드 스텝퍼
 # -----------------------------------------------------------------------------
 def main():
-    # 로깅 먼저 켠다(멱등 — rerun 에도 중복 안 됨). 로그 파일 경로는 세션에 보관.
+    # 로깅 먼저(멱등). 로그 파일 경로는 세션에 보관(로그 패널이 tail).
     logfile = setup_logging("app")
     st.session_state.setdefault("logfile", str(logfile))
+    st.session_state.setdefault("step", 1)
 
-    st.set_page_config(page_title="RAG Lab", layout="wide")
-    st.title("🧪 RAG Lab")
+    st.set_page_config(page_title="k-green-signal", layout="wide")
+    st.title("🚦 대한민국 친환경 소비 인지도 실시간 신호등")
+    st.caption("k-green-signal · 업로드 → 인제스트 → 검수 → 인덱싱 → 질의")
 
-    # --- API Key 확인 (Q&A 탭에서만 필요하지만, 클라이언트는 한 번만 만든다) ---
     api_key = get_api_key()
-    client = OpenAI(api_key=api_key) if api_key else None
-    log.info("앱 렌더 — api_key=%s", "있음" if api_key else "없음")
+    ctx = build_ctx()
+    log.info("앱 렌더 — step=%s, pdf=%s, idx=%s, api_key=%s",
+             st.session_state.step, ctx["pdf_count"], ctx["index_count"],
+             "있음" if api_key else "없음")
 
-    rag_tab, qa_tab, review_tab = st.tabs(["🔎 데이터 질의(RAG)", "📄 문서 Q&A", "🔍 검수"])
+    render_status_panel(ctx)
+    render_stepper_nav(ctx, st.session_state.step)
+    st.divider()
 
-    no_key_msg = (
-        "OPENAI_API_KEY 를 찾을 수 없습니다.\n\n"
-        "프로젝트 폴더에 `.env` 파일을 만들고 아래 한 줄을 넣어주세요:\n\n"
-        "`OPENAI_API_KEY=sk-...`"
-    )
-
-    with rag_tab:
-        # RAG 검색·답변은 임베딩·답변에 API Key 가 필요하다.
-        if client is None:
-            st.error(no_key_msg)
-        else:
-            render_rag_tab()
-
-    with qa_tab:
-        if client is None:
-            st.error(no_key_msg)
-        else:
-            render_qa_tab(client)
-
-    with review_tab:
-        # 검수는 API Key 없이도 동작한다(LLM 호출 없음).
+    step = st.session_state.step
+    if step in STEPS_NEED_KEY and api_key is None:
+        st.error(NO_KEY_MSG)
+    elif step == 1:
+        render_step_upload(ctx)
+    elif step == 2:
+        render_step_ingest(ctx)
+    elif step == 3:
         render_review_tab()
+    elif step == 4:
+        render_step_index(ctx)
+    elif step == 5:
+        render_rag_tab()
+
+    render_log_panel()
 
 
 if __name__ == "__main__":

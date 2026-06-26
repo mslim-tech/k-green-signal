@@ -17,13 +17,13 @@ LOG_DIR = PROJECT_ROOT / "logs"
 def test_app_loads_and_title_visible(page: Page, base_url: str):
     page.goto("/")
     # Streamlit 스크립트가 실제로 실행되면 제목 h1 이 그려진다.
-    expect(page.get_by_text(re.compile("RAG Lab"))).to_be_visible(timeout=30000)
+    expect(page.get_by_text(re.compile("신호등"))).to_be_visible(timeout=30000)
 
 
 def test_app_render_writes_log(page: Page, base_url: str):
     """ 브라우저 세션이 main() 을 실행 → logs/app_*.log 에 '앱 렌더' 이벤트가 남아야 한다. """
     page.goto("/")
-    expect(page.get_by_text(re.compile("RAG Lab"))).to_be_visible(timeout=30000)
+    expect(page.get_by_text(re.compile("신호등"))).to_be_visible(timeout=30000)
 
     # 로그 flush 여유
     deadline = time.monotonic() + 10
