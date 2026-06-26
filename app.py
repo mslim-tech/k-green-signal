@@ -15,6 +15,7 @@
 
 import csv
 import io
+import logging
 import os
 from pathlib import Path
 
@@ -30,6 +31,11 @@ from rag.config import ANSWER_MODEL as MODEL_NAME
 
 # 검수 기록 저장/적용 로직 (5단계)
 from rag import corrections
+
+# 공용 로깅 (파일+콘솔). 앱이 무슨 일을 하는지 logs/ 에 남긴다.
+from rag.logging_setup import setup_logging
+
+log = logging.getLogger("app")
 
 # 4단계가 만든 검수 큐 파일 위치
 REVIEW_QUEUE_PATH = Path("outputs") / "review_queue.csv"
@@ -472,12 +478,17 @@ def render_qa_tab(client):
 # 6) 진입점: 탭 2개로 화면을 나눈다.
 # -----------------------------------------------------------------------------
 def main():
+    # 로깅 먼저 켠다(멱등 — rerun 에도 중복 안 됨). 로그 파일 경로는 세션에 보관.
+    logfile = setup_logging("app")
+    st.session_state.setdefault("logfile", str(logfile))
+
     st.set_page_config(page_title="RAG Lab", layout="wide")
     st.title("🧪 RAG Lab")
 
     # --- API Key 확인 (Q&A 탭에서만 필요하지만, 클라이언트는 한 번만 만든다) ---
     api_key = get_api_key()
     client = OpenAI(api_key=api_key) if api_key else None
+    log.info("앱 렌더 — api_key=%s", "있음" if api_key else "없음")
 
     rag_tab, qa_tab, review_tab = st.tabs(["🔎 데이터 질의(RAG)", "📄 문서 Q&A", "🔍 검수"])
 

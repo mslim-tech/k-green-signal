@@ -1,0 +1,115 @@
+# tests/e2e/conftest.py
+# -----------------------------------------------------------------------------
+# Playwright E2E 공용 픽스처: 헤드리스 Streamlit 서버를 띄우고 종료까지 관리한다.
+#
+#   - 세션당 한 번 streamlit 을 서브프로세스로 기동(포트 8599, UTF-8, RAG_FAKE_LLM=1).
+#   - 서버 stdout/stderr 를 UTF-8 로그 파일로 캡처 → 테스트가 서버측 동작을 확인.
+#   - /_stcore/health 가 200 이 될 때까지 폴링한 뒤 테스트 시작.
+#   - 종료 시 Windows 프로세스 트리를 taskkill 로 정리(자식 orphan 방지).
+#
+# Windows 주의: PowerShell '>' 는 UTF-16 이라 깨지므로, 여기서 직접
+#   open(logfile, encoding="utf-8") 로 stdout 을 받는다.
+# -----------------------------------------------------------------------------
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+PORT = 8599
+BASE_URL = f"http://localhost:{PORT}"
+HEALTH = f"{BASE_URL}/_stcore/health"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOG_DIR = PROJECT_ROOT / "logs"
+
+
+def _free_port(port: int) -> None:
+    """ 해당 포트를 LISTEN 중인 프로세스를 종료(트리째). 이전 테스트/수동 기동 잔재 정리. """
+    try:
+        out = subprocess.run(["netstat", "-ano", "-p", "tcp"],
+                             capture_output=True, text=True).stdout
+        pids = set()
+        for line in out.splitlines():
+            if f":{port} " in line and "LISTENING" in line:
+                pids.add(line.split()[-1])
+        for pid in pids:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", pid],
+                           capture_output=True)
+    except Exception:
+        pass
+
+
+def _wait_health(timeout: float = 90.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(HEALTH, timeout=2) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(1.5)
+    return False
+
+
+@pytest.fixture(scope="session")
+def server_log() -> Path:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    return LOG_DIR / f"streamlit_e2e_{datetime.now():%Y%m%d_%H%M%S}.log"
+
+
+@pytest.fixture(scope="session")
+def streamlit_server(server_log: Path):
+    """ 세션 동안 헤드리스 streamlit 을 띄우고 종료까지 관리. base_url 을 돌려준다. """
+    _free_port(PORT)
+
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONUTF8": "1",
+        "RAG_FAKE_LLM": "1",          # E2E 는 LLM 호출 없이 결정적 스텁 사용
+        "RAG_LOG_DIR": str(LOG_DIR),
+    }
+    cmd = [
+        "uv", "run", "streamlit", "run", "app.py",
+        "--server.headless", "true",
+        "--server.port", str(PORT),
+        "--server.fileWatcherType", "none",
+        "--logger.level", "info",
+    ]
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    logf = open(server_log, "w", encoding="utf-8")
+    proc = subprocess.Popen(
+        cmd, cwd=str(PROJECT_ROOT), env=env,
+        stdout=logf, stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+
+    try:
+        if not _wait_health():
+            logf.flush()
+            raise RuntimeError(
+                f"streamlit 이 {PORT} 에서 기동하지 못함. 로그: {server_log}"
+            )
+        yield BASE_URL
+    finally:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       capture_output=True)
+        try:
+            logf.close()
+        except Exception:
+            pass
+
+
+@pytest.fixture(scope="session")
+def base_url(streamlit_server: str) -> str:
+    """ pytest-playwright 가 page.goto('/') 를 풀 때 쓰는 base_url 을 우리 서버로. """
+    return streamlit_server

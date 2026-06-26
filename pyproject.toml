@@ -20,3 +20,17 @@ dependencies = [
     "streamlit>=1.58.0",
     "tiktoken>=0.13.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-playwright>=0.8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: 실제 OpenAI 를 호출하는 테스트 (기본 skip — RAG_FAKE_LLM 미사용)",
+]
+# 기본은 빠르고 결정적인 테스트만(-m 'not slow'). 실패 시 trace/스크린샷 보관.
+addopts = "-m 'not slow' --tracing=retain-on-failure --screenshot=only-on-failure --output=test-results"
