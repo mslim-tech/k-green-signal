@@ -76,7 +76,7 @@ flowchart TD
 | **3. 표준화** | `rag/standardize.py` | 연도별 문항을 표준 문항 ID로 통합 → Long CSV | ✅ |
 | **4. 정제·통합** | `rag/refine·dedup·flags·review.py` | 라벨 표준화·중복 분리·의심값 플래그·검수 큐 | ✅ |
 | **5. 검수 UI** | `app.py`(스텝퍼 3단계) + `rag/corrections.py` | 저신뢰 행을 사람이 원문과 대조·수정 → `corrections.jsonl` | ✅ |
-| **6. RAG 검색** | `rag/chunking·index·retriever·answer.py` | 정형 데이터 위 **근거 인용 질의응답**(Chroma 검색 → 출처 인용 답변, 단계별 소요시간) | ✅ 기본 |
+| **6. RAG 검색** | `rag/chunking·index·retriever·answer.py` | 정형 데이터 위 **근거 인용 질의응답**(Chroma 검색 → **LLM rerank** → 출처 인용 답변, 단계별 소요시간) | ✅ 기본 |
 | **+ 앱/검증** | `app.py` 가이드 스텝퍼 · `rag/validate.py`(준비 게이트) · `rag/pipeline.py` · `tests/e2e`(Playwright) | 업로드→인제스트→검수→(게이트)→인덱싱→질의 + 🩺 시스템 로그 | ✅ |
 
 > 단계별 세부 체크리스트는 [`plan.md`](./plan.md) 참고.
