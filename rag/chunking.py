@@ -69,6 +69,9 @@ def load_rows() -> list[dict]:
     skipped = {k[:3] for k, rec in latest.items() if rec.get("status") == corrections.STATUS_SKIP}
     if skipped:
         rows = [r for r in rows if corrections.row_key(r) not in skipped]
+    # 추출이 깨져 소스에서 사라졌지만 사람이 PDF 대조로 확정한 표(예: 2023 표 3-60
+    # '친환경제품 확대 희망')를 복원해 인덱스에 포함한다(확정값만, 지어내지 않음).
+    rows += corrections.confirmed_only_rows(rows)
     return rows
 
 

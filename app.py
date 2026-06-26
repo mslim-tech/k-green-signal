@@ -93,7 +93,13 @@ def effective_value(row, latest):
 
 def needs_value(row, latest) -> bool:
     """ 이 행이 '값이 비어 반드시 검수해야 하는' 행인가.
-        반영값(정정 포함)이 숫자로 읽히지 않으면 True. """
+        반영값(정정 포함)이 숫자로 읽히지 않으면 True.
+
+        단, 사람이 이미 검수해 '빈 값이 맞다(confirmed)'거나 '제외(skip)'로 처리한 행은
+        더 이상 검수 대상이 아니다 — 같은 빈칸을 반복해 들이밀지 않는다(사용자 요청). """
+    rec = latest.get(corrections.row_key(row) + ("value",))
+    if rec and rec.get("status") in (corrections.STATUS_CONFIRMED, corrections.STATUS_SKIP):
+        return False
     v = (effective_value(row, latest) or "").strip()
     if not v:
         return True
@@ -197,11 +203,18 @@ def render_review_tab():
     latest = corrections.latest_by_key(recs)
 
     # --- D3: 값이 비어 반드시 검수해야 하는 행 안내(직접 찾지 않게) ---
+    # 이미 사람이 '빈 값이 맞다(confirmed)'거나 '제외(skip)'로 처리한 행은 needs_value 가
+    # 빼주므로(반복 노출 방지), 여기 남는 건 '아직 손대지 않은' 빈칸뿐이다.
     blank_rows = [r for r in queue if needs_value(r, latest)]
     if blank_rows:
         st.warning(
             f"⚠️ **값이 비어 검수가 필요한 행: {len(blank_rows)}건** — "
             "아래 '값 없는 행만 보기'로 모아 보고, 행을 골라 값을 채워주세요."
+        )
+    else:
+        st.success(
+            "✅ 값 없는 행이 모두 검수 처리되었습니다 "
+            "(빈 값이 맞다고 확인했거나 제외한 행은 다시 띄우지 않습니다)."
         )
     only_blank = st.checkbox("값 없는 행만 보기", value=bool(blank_rows),
                              help="반영값이 비었거나 숫자가 아닌 행만 표시합니다.")

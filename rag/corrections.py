@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -135,6 +136,102 @@ def add_correction(
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
     return record
+
+
+_PAGE_RE = re.compile(r"p\.?\s*(\d+)")
+
+# 검수로 복원하는 표의 '사람이 확인한' 라벨/요약(도메인 확정 설명).
+# 추출이 깨져 표준 라벨/문항요약이 없으므로, 검색·리랭크가 비슷한 다른 표와
+# 헷갈리지 않도록 명시한다. (값이 아니라 '이 표가 무엇인지'에 대한 설명이며,
+# 도메인 전문가가 확인해 준 구분이다 — 지어낸 수치가 아니다.)
+_RESTORED_TABLE_META: dict[tuple, dict] = {
+    ("2023", "친환경제품_확대희망품목"): {
+        "std_label": "친환경제품 확대 희망 품목 (표 3-60)",
+        "question_summary": (
+            "환경표지 인증제품(녹색제품)에 한정하지 않고 '친환경제품 전체'를 대상으로 "
+            "향후 확대되길 희망하는 품목을 묻는 문항(표 3-60). "
+            "'환경표지 인증제품 확대 희망 품목' 문항과는 별개의 표다."
+        ),
+    },
+}
+
+
+def confirmed_only_rows(existing_rows: list[dict],
+                        path: Path = CORRECTIONS_PATH) -> list[dict]:
+    """ 소스 데이터엔 없고 corrections 에만 사람이 확정(fixed/confirmed)으로 남긴
+        (year, std_id) 표를 인덱싱용 행으로 '복원'한다.
+
+        왜 필요한가: 일부 표(예: 2023 표 3-60 '친환경제품 확대 희망')는 2단 표라
+        추출이 깨져 표준화/중복제거에서 통째로 드롭됐다. 사람이 PDF 를 대조해
+        corrections.jsonl 에 값을 확정했지만, apply_corrections 는 '기존 행만' 고치므로
+        대응 행이 없는 이 확정값은 인덱스에 들어가지 못한다 → 데이터 손실.
+        이 함수가 그 확정값을 행으로 만들어 chunking 이 인덱싱하게 한다.
+
+        값 해석(apply_corrections 와 동일 의미):
+          - fixed     → new_value (사람이 고쳐 넣은 값)
+          - confirmed → old_value (사람이 '맞다'고 확인한 값)
+          - skip / 빈값 → 제외(지어내지 않는다)
+        메타(source/page)는 같은 연도의 기존 행과 검수 메모(note)에서 가져온다.
+    """
+    existing = {(r.get("year"), r.get("std_id")) for r in existing_rows}
+    source_by_year: dict[str, str] = {}
+    for r in existing_rows:
+        y = r.get("year")
+        if y and y not in source_by_year and (r.get("source") or "").strip():
+            source_by_year[y] = r["source"]
+
+    # 페이지 번호는 검수 메모(note)에 적힌 'p.NN' 에서 가져온다. 최신 레코드 note 엔
+    # 없고 과거 레코드(원문 대조 시점)에만 있을 수 있어 '전체 레코드'를 스캔한다.
+    all_records = load_corrections(path)
+    page_by_key: dict[tuple, str] = {}
+    for rec in all_records:
+        key = (rec.get("year"), rec.get("std_id"))
+        if key not in page_by_key:
+            m = _PAGE_RE.search(rec.get("note") or "")
+            if m:
+                page_by_key[key] = m.group(1)
+
+    # corrections 에만 있는 (year, std_id) 별로 최신 레코드를 모은다.
+    groups: dict[tuple, list[dict]] = {}
+    for rec in latest_by_key(all_records).values():
+        key = (rec.get("year"), rec.get("std_id"))
+        if key in existing:
+            continue
+        groups.setdefault(key, []).append(rec)
+
+    rows: list[dict] = []
+    for (year, std_id), recs in groups.items():
+        page = page_by_key.get((year, std_id), "")
+        meta = _RESTORED_TABLE_META.get((year, std_id), {})
+        std_label = meta.get("std_label") or (std_id or "").replace("_", " ")
+        summary = meta.get("question_summary") or std_label
+        source = source_by_year.get(year, "")
+        for rec in recs:
+            status = rec.get("status")
+            if status == STATUS_FIXED:
+                value = (rec.get("new_value") or "").strip()
+            elif status == STATUS_CONFIRMED:
+                value = (rec.get("old_value") or "").strip()
+            else:
+                continue  # skip 은 인덱싱하지 않는다
+            if not value:
+                continue
+            rows.append({
+                "year": year,
+                "std_id": std_id,
+                "std_label": std_label,
+                # 비슷한 다른 표와 구분되도록 명시적 요약을 쓴다(없으면 라벨로 대체).
+                # '검수 복원'이라는 출처는 warning(메타)에만 남긴다.
+                "question_summary": summary,
+                "source": source,
+                "page_start": page,
+                "page_end": page,
+                "std_response_label": rec.get("std_response_label", ""),
+                "value": value,
+                "unit": "%",
+                "warning": "검수 복원(표 추출 누락 → 사람 확정값)",
+            })
+    return rows
 
 
 def apply_corrections(rows: list[dict], path: Path = CORRECTIONS_PATH) -> tuple[list[dict], int]:

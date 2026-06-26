@@ -1,0 +1,4 @@
+{"id": "2023-green-product-awareness", "q": "2023년 녹색제품 인지도는?", "year": "2023", "source": "2023년 인지도조사", "answer_has": ["51.7"], "head_lacks": [], "truth": "인지 51.7% (p.33-34)"}
+{"id": "2024-env-concern", "q": "2024년 환경문제에 대한 관심도는?", "year": "2024", "source": "2024년 친환경", "answer_has": ["96.4"], "head_lacks": [], "truth": "관심 있음 96.4% (p.37-38)"}
+{"id": "2024-greencard-awareness", "q": "2024년 그린카드 인지도는?", "year": "2024", "source": "2024년 친환경", "answer_has": ["62.6"], "head_lacks": [], "truth": "알고 있다 62.6% (p.107-108)"}
+{"id": "2025-expand-top", "q": "2025년에 확대되길 바라는 환경표지 인증제품 1위는?", "year": "2025", "source": "2025년 친환경", "answer_has": ["위생용품"], "head_lacks": ["기타", "없음"], "truth": "개인 위생용품 55.2% (p.41-42)"}
