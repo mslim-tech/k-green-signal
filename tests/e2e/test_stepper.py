@@ -31,11 +31,11 @@ def test_stepper_navigation(page: Page, base_url: str):
     expect(page.get_by_role("button", name=re.compile("인덱싱 실행"))).to_be_visible(timeout=15000)
 
 
-def test_index_integrity_warning(page: Page, base_url: str):
-    """ D5: 현재 데이터가 게이트 미통과면 사이드 상태 패널에 인덱스 정합 경고가 뜬다. """
+def test_index_integrity_status(page: Page, base_url: str):
+    """ D5: 사이드 상태 패널에 인덱스 정합 상태가 표시된다(정화 후 ✅ 통과). """
     _goto(page)
     expect(page.get_by_text(re.compile("인덱스 정합"))).to_be_visible(timeout=15000)
-    expect(page.get_by_text(re.compile("미통과"))).to_be_visible(timeout=15000)
+    expect(page.get_by_text(re.compile("게이트 통과"))).to_be_visible(timeout=15000)
 
 
 def test_step_todo_and_next_button(page: Page, base_url: str):
@@ -46,11 +46,9 @@ def test_step_todo_and_next_button(page: Page, base_url: str):
     expect(page.get_by_role("button", name=re.compile("다음 단계로"))).to_be_visible(timeout=15000)
 
 
-def test_index_gate_blocks_button(page: Page, base_url: str):
-    """ 준비 게이트가 미달이면(현재 데이터는 차단 상태) 인덱싱 버튼이 비활성이어야 한다. """
+def test_index_gate_passes_after_cleanup(page: Page, base_url: str):
+    """ 정화 후 준비 게이트가 통과면 '준비 완료'가 뜨고 인덱싱 버튼이 활성이어야 한다. """
     _goto(page)
     page.get_by_role("button", name=re.compile(r"4\. 📚 인덱싱")).click()
-    # 차단 요약이 뜨고
-    expect(page.get_by_text(re.compile("인덱싱 차단"))).to_be_visible(timeout=15000)
-    # 인덱싱 실행 버튼은 비활성(엄격 게이트)
-    expect(page.get_by_role("button", name=re.compile("인덱싱 실행"))).to_be_disabled(timeout=15000)
+    expect(page.get_by_text(re.compile("준비 완료"))).to_be_visible(timeout=15000)
+    expect(page.get_by_role("button", name=re.compile("인덱싱 실행"))).to_be_enabled(timeout=15000)

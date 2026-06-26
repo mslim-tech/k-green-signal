@@ -63,6 +63,12 @@ def load_rows() -> list[dict]:
         rows = list(csv.DictReader(f))
     # 사람이 확정한 보정값을 먼저 반영(인덱스엔 확정 사실만)
     rows, _ = corrections.apply_corrections(rows)
+    # 검수에서 '제외(skip)'로 표시한 행은 인덱싱하지 않는다
+    # (근거 없어 값을 확정할 수 없는 행 — 지어내지 않고 빼는 것이 원칙).
+    latest = corrections.latest_by_key()
+    skipped = {k[:3] for k, rec in latest.items() if rec.get("status") == corrections.STATUS_SKIP}
+    if skipped:
+        rows = [r for r in rows if corrections.row_key(r) not in skipped]
     return rows
 
 
