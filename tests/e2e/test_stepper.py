@@ -31,6 +31,14 @@ def test_stepper_navigation(page: Page, base_url: str):
     expect(page.get_by_role("button", name=re.compile("인덱싱 실행"))).to_be_visible(timeout=15000)
 
 
+def test_step_todo_and_next_button(page: Page, base_url: str):
+    """ D2: 각 단계에 '지금 할 일' 안내 + '다음 단계로' 버튼이 보인다. """
+    _goto(page)
+    page.get_by_role("button", name=re.compile(r"3\. 🔍 검수")).click()
+    expect(page.get_by_text(re.compile("지금 할 일"))).to_be_visible(timeout=15000)
+    expect(page.get_by_role("button", name=re.compile("다음 단계로"))).to_be_visible(timeout=15000)
+
+
 def test_index_gate_blocks_button(page: Page, base_url: str):
     """ 준비 게이트가 미달이면(현재 데이터는 차단 상태) 인덱싱 버튼이 비활성이어야 한다. """
     _goto(page)

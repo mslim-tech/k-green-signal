@@ -353,6 +353,31 @@ STEPS = [
 # 임베딩/추출/답변에 API Key 가 필요한 단계
 STEPS_NEED_KEY = {2, 4, 5}
 
+# D2: 각 단계에서 '지금 무엇을 해야 하는지' 한 줄 안내(행동 유도)
+STEP_TODO = {
+    1: "분석할 보고서 PDF를 올리고 'data/ 에 저장'을 누르세요.",
+    2: "'전체 실행'을 눌러 추출~검수큐까지 처리하세요. (완료까지 수 분 걸릴 수 있어요)",
+    3: "🔴 값 없는 행부터 골라 원문을 보고 값을 확정(저장)하세요.",
+    4: "준비 게이트를 통과하면 '인덱싱 실행'을 누르세요.",
+    5: "데이터에 대해 질문을 입력하세요. (출처 인용 답변)",
+}
+
+
+def render_next_step_nav(ctx: dict, step: int) -> None:
+    """ D2: 현재 단계를 마치면 다음 단계로 가는 버튼/안내. """
+    if step >= len(STEPS):
+        return
+    nxt = step + 1
+    label = next(l for n, l, _ in STEPS if n == nxt)
+    st.divider()
+    if can_enter(nxt, ctx):
+        # 라벨에 'N.' 번호는 넣지 않는다(상단 단계 네비 버튼과 텍스트 충돌 방지).
+        if st.button(f"다음 단계로 → {label}", type="primary", key=f"goto_next_{step}"):
+            st.session_state.step = nxt
+            st.rerun()
+    else:
+        st.caption(f"🔒 다음 단계({label})는 이 단계를 끝내야 열립니다.")
+
 
 def _data_pdfs() -> list[Path]:
     return sorted(DATA_DIR.glob("*.pdf")) if DATA_DIR.exists() else []
@@ -691,6 +716,10 @@ def main():
     st.divider()
 
     step = st.session_state.step
+    # D2: 이 단계에서 '지금 할 일' 한 줄 안내(설명은 각 단계 화면 상단 caption 에).
+    if step in STEP_TODO:
+        st.info(f"👣 지금 할 일 — {STEP_TODO[step]}")
+
     if step in STEPS_NEED_KEY and api_key is None:
         st.error(NO_KEY_MSG)
     elif step == 1:
@@ -704,6 +733,8 @@ def main():
     elif step == 5:
         render_rag_tab()
 
+    # D2: 다음 단계로 가는 행동 안내(앞 단계 산출물이 준비됐으면 버튼, 아니면 잠금 안내)
+    render_next_step_nav(ctx, step)
     render_log_panel()
 
 
