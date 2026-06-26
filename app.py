@@ -281,12 +281,18 @@ def render_review_tab():
 # -----------------------------------------------------------------------------
 # 4b) RAG 데이터 질의 탭 (6단계) — 정형 데이터에서 검색 + 근거 인용 답변
 # -----------------------------------------------------------------------------
-def render_rag_tab():
+def render_rag_tab(gate=None):
     st.subheader("🔎 데이터 질의 (RAG · 근거 인용)")
     st.caption(
         "정형화된 인지도 조사 데이터에서 검색해 **출처(파일·페이지)를 인용**해 답합니다. "
         "근거가 없으면 '문서에서 찾을 수 없습니다'라고 답합니다."
     )
+    # D5: 인덱스가 게이트 미통과 데이터로 만들어졌으면 답변 신뢰에 주의.
+    if gate is not None and not gate.ok:
+        st.warning(
+            "⚠️ 현재 인덱스는 **게이트 미통과 데이터**(미확정 비전·빈값·미검수 high 포함 가능)로 "
+            "만들어졌을 수 있습니다. 3단계 검수로 확정 후 4단계에서 재인덱싱하면 답변이 더 정확해집니다."
+        )
 
     c1, c2 = st.columns([3, 1])
     with c2:
@@ -466,12 +472,20 @@ def render_stepper_nav(ctx: dict, current: int) -> None:
                 st.rerun()
 
 
-def render_status_panel(ctx: dict) -> None:
+def render_status_panel(ctx: dict, gate=None) -> None:
     with st.sidebar:
         st.header("📊 데이터 상태")
         st.metric("업로드된 PDF", ctx["pdf_count"])
         st.metric("인덱싱된 청크", ctx["index_count"])
         st.metric("검수 남은 high", ctx["remaining_high"])
+
+        # D5: 인덱스 정합(현재 데이터가 게이트를 통과하는가)
+        if ctx["index_count"] > 0 and gate is not None:
+            if gate.ok:
+                st.success("인덱스 정합: ✅ 게이트 통과 데이터")
+            else:
+                st.warning("인덱스 정합: ⚠️ 미통과(미확정/빈값/미검수 포함 가능) — 검수 후 재인덱싱 권장")
+
         st.divider()
         # 다음 할 일 안내
         if ctx["pdf_count"] == 0:
@@ -650,15 +664,17 @@ def render_step_ingest(ctx: dict) -> None:
         _ingest_monitor()
 
 
-def render_step_index(ctx: dict) -> None:
+def render_step_index(ctx: dict, gate=None) -> None:
     st.subheader("📚 4단계 · 인덱싱 (준비 게이트)")
     st.caption("아래 준비 게이트를 통과해야 인덱싱할 수 있습니다. (추측은 데이터가 아니다 — 확정 사실만 인덱싱)")
-    try:
-        from rag.validate import validate_ready
-        rep = validate_ready(strict=True)
-    except Exception as error:
-        st.error(f"준비 점검 실패: {error}")
-        return
+    rep = gate
+    if rep is None:
+        try:
+            from rag.validate import validate_ready
+            rep = validate_ready(strict=True)
+        except Exception as error:
+            st.error(f"준비 점검 실패: {error}")
+            return
 
     if rep.ok:
         st.success(f"✅ {rep.summary}")
@@ -711,7 +727,16 @@ def main():
              st.session_state.step, ctx["pdf_count"], ctx["index_count"],
              "있음" if api_key else "없음")
 
-    render_status_panel(ctx)
+    # 준비 게이트는 인덱스 정합 경고(D5)·인덱싱(4)에서 공유하므로 한 번만 계산.
+    gate = None
+    if ctx["review_queue"]:
+        try:
+            from rag.validate import validate_ready
+            gate = validate_ready(strict=True)
+        except Exception:
+            gate = None
+
+    render_status_panel(ctx, gate)
     render_stepper_nav(ctx, st.session_state.step)
     st.divider()
 
@@ -729,9 +754,9 @@ def main():
     elif step == 3:
         render_review_tab()
     elif step == 4:
-        render_step_index(ctx)
+        render_step_index(ctx, gate)
     elif step == 5:
-        render_rag_tab()
+        render_rag_tab(gate)
 
     # D2: 다음 단계로 가는 행동 안내(앞 단계 산출물이 준비됐으면 버튼, 아니면 잠금 안내)
     render_next_step_nav(ctx, step)

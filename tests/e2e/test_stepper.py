@@ -31,6 +31,13 @@ def test_stepper_navigation(page: Page, base_url: str):
     expect(page.get_by_role("button", name=re.compile("인덱싱 실행"))).to_be_visible(timeout=15000)
 
 
+def test_index_integrity_warning(page: Page, base_url: str):
+    """ D5: 현재 데이터가 게이트 미통과면 사이드 상태 패널에 인덱스 정합 경고가 뜬다. """
+    _goto(page)
+    expect(page.get_by_text(re.compile("인덱스 정합"))).to_be_visible(timeout=15000)
+    expect(page.get_by_text(re.compile("미통과"))).to_be_visible(timeout=15000)
+
+
 def test_step_todo_and_next_button(page: Page, base_url: str):
     """ D2: 각 단계에 '지금 할 일' 안내 + '다음 단계로' 버튼이 보인다. """
     _goto(page)
