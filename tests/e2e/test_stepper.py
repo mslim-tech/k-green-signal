@@ -31,10 +31,11 @@ def test_stepper_navigation(page: Page, base_url: str):
     expect(page.get_by_role("button", name=re.compile("인덱싱 실행"))).to_be_visible(timeout=15000)
 
 
-def test_index_gate_visible(page: Page, base_url: str):
-    """ 4단계에 인덱싱 실행 버튼과 게이트 요약(✅/⛔)이 보인다. """
+def test_index_gate_blocks_button(page: Page, base_url: str):
+    """ 준비 게이트가 미달이면(현재 데이터는 차단 상태) 인덱싱 버튼이 비활성이어야 한다. """
     _goto(page)
     page.get_by_role("button", name=re.compile(r"4\. 📚 인덱싱")).click()
-    expect(page.get_by_role("button", name=re.compile("인덱싱 실행"))).to_be_visible(timeout=15000)
-    # 게이트 요약 문구(통과/차단 중 하나)가 보여야 한다.
-    expect(page.get_by_text(re.compile("준비 완료|인덱싱 차단"))).to_be_visible(timeout=15000)
+    # 차단 요약이 뜨고
+    expect(page.get_by_text(re.compile("인덱싱 차단"))).to_be_visible(timeout=15000)
+    # 인덱싱 실행 버튼은 비활성(엄격 게이트)
+    expect(page.get_by_role("button", name=re.compile("인덱싱 실행"))).to_be_disabled(timeout=15000)

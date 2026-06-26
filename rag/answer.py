@@ -15,8 +15,10 @@
 
 from __future__ import annotations
 
+import os
 import sys
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 try:
     from rag.extract import get_client
@@ -43,6 +45,7 @@ SYSTEM_PROMPT = (
 class Answer:
     text: str
     hits: list[Hit]
+    timings: dict = field(default_factory=dict)   # {"retrieval","generate","total"} 초
 
 
 def _build_context(hits: list[Hit]) -> str:
@@ -56,10 +59,24 @@ def _build_context(hits: list[Hit]) -> str:
 
 
 def answer(query: str, k: int = 5, year: str | None = None) -> Answer:
-    """ 질문에 대해 검색→근거 인용 답변을 생성한다. """
+    """ 질문에 대해 검색→근거 인용 답변을 생성한다. 단계별 소요시간도 함께 돌려준다. """
+    t0 = time.time()
+
+    # 테스트/검증 모드: 실제 임베딩·LLM 없이 결정적 스텁(무료·빠름). 인용 형식 유지.
+    if os.getenv("RAG_FAKE_LLM"):
+        return Answer(
+            text="(테스트 답변) 예시 인지율은 85.2% 입니다. [출처: sample p.1]",
+            hits=[], timings={"retrieval": 0.0, "generate": 0.0, "total": 0.0},
+        )
+
+    t_ret = time.time()
     hits = search(query, k=k, year=year)
+    retrieval = round(time.time() - t_ret, 2)
+
     if not hits:
-        return Answer(text="문서에서 찾을 수 없습니다. (검색 결과 없음)", hits=[])
+        return Answer(text="문서에서 찾을 수 없습니다. (검색 결과 없음)", hits=[],
+                      timings={"retrieval": retrieval, "generate": 0.0,
+                               "total": round(time.time() - t0, 2)})
 
     client = get_client()
     user_prompt = (
@@ -67,6 +84,7 @@ def answer(query: str, k: int = 5, year: str | None = None) -> Answer:
         f"[질문]\n{query}\n\n"
         "위 [근거]에 있는 내용만으로 답하고, 수치마다 [출처: 파일 p.쪽]을 붙여라."
     )
+    t_gen = time.time()
     resp = client.chat.completions.create(
         model=ANSWER_MODEL,
         temperature=0,
@@ -75,7 +93,12 @@ def answer(query: str, k: int = 5, year: str | None = None) -> Answer:
             {"role": "user", "content": user_prompt},
         ],
     )
-    return Answer(text=resp.choices[0].message.content, hits=hits)
+    generate = round(time.time() - t_gen, 2)
+    return Answer(
+        text=resp.choices[0].message.content, hits=hits,
+        timings={"retrieval": retrieval, "generate": generate,
+                 "total": round(time.time() - t0, 2)},
+    )
 
 
 def main() -> None:

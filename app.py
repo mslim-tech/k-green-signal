@@ -17,23 +17,23 @@ import csv
 import io
 import logging
 import os
+import time
 from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
 
-import pypdf
-import docx
-
-# 사용할 모델은 중앙 설정(rag/config.py)에서 가져온다. (현재 gpt-5.4-mini)
-from rag.config import ANSWER_MODEL as MODEL_NAME
+import pypdf   # 1단계 업로드에서 페이지 수 표시용
 
 # 검수 기록 저장/적용 로직 (5단계)
 from rag import corrections
 
 # 공용 로깅 (파일+콘솔). 앱이 무슨 일을 하는지 logs/ 에 남긴다.
 from rag.logging_setup import setup_logging
+
+# 인제스트 단계를 서브프로세스로 돌리는 러너(긴 LLM 단계가 UI 를 막지 않게).
+from rag import pipeline
 
 log = logging.getLogger("app")
 
@@ -49,98 +49,6 @@ def get_api_key():
     """ .env 에서 OPENAI_API_KEY 를 읽어 반환한다. 없으면 None 을 반환한다. """
     load_dotenv()
     return os.getenv("OPENAI_API_KEY")
-
-
-# -----------------------------------------------------------------------------
-# 2) 텍스트 추출 함수
-#    - 파일 형식(PDF/TXT/DOCX)에 따라 다른 방법으로 텍스트를 뽑는다.
-#    - 오류가 나면 사용자가 이해할 수 있는 메시지를 함께 돌려준다.
-#      반환값: (추출된_텍스트, 오류_메시지)  -> 정상이면 오류_메시지 는 None
-# -----------------------------------------------------------------------------
-def extract_pdf(file_bytes):
-    """ PDF 파일에서 페이지별 텍스트를 추출한다. (pypdf 사용) """
-    reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-    pages = []
-    for page in reader.pages:
-        # 페이지에 텍스트가 없을 수도 있으므로 빈 문자열로 안전하게 처리한다.
-        pages.append(page.extract_text() or "")
-    return "\n".join(pages)
-
-
-def extract_txt(file_bytes):
-    """ TXT 파일 내용을 그대로 읽는다. UTF-8 우선, 실패 시 cp949 로 재시도한다. """
-    try:
-        return file_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        # 한글 윈도우에서 만든 텍스트 파일은 cp949(euc-kr) 인 경우가 많다.
-        return file_bytes.decode("cp949")
-
-
-def extract_docx(file_bytes):
-    """ DOCX 파일에서 문단 텍스트를 추출한다. (python-docx 사용) """
-    document = docx.Document(io.BytesIO(file_bytes))
-    paragraphs = [p.text for p in document.paragraphs]
-    return "\n".join(paragraphs)
-
-
-def extract_text(uploaded_file):
-    """
-    업로드된 파일에서 텍스트를 추출한다.
-    반환값: (텍스트, 오류메시지)
-      - 성공: (텍스트, None)
-      - 실패: (None, "사용자에게 보여줄 안내 문구")
-    """
-    file_bytes = uploaded_file.getvalue()
-    # 파일 확장자를 소문자로 통일해서 형식을 판단한다.
-    file_name = uploaded_file.name
-    extension = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
-
-    try:
-        if extension == "pdf":
-            text = extract_pdf(file_bytes)
-        elif extension == "txt":
-            text = extract_txt(file_bytes)
-        elif extension == "docx":
-            text = extract_docx(file_bytes)
-        else:
-            return None, f"지원하지 않는 형식입니다: .{extension} (PDF, TXT, DOCX 만 가능합니다)"
-    except Exception as error:
-        # 어떤 오류든 사용자가 이해할 수 있는 안내로 바꿔서 돌려준다.
-        return None, f"'{file_name}' 에서 텍스트를 추출하지 못했습니다. 파일이 손상되었거나 형식이 올바른지 확인해주세요. (상세: {error})"
-
-    if not text.strip():
-        return None, f"'{file_name}' 에서 읽을 수 있는 텍스트를 찾지 못했습니다. (스캔 이미지 PDF 일 수 있습니다)"
-
-    return text, None
-
-
-# -----------------------------------------------------------------------------
-# 3) OpenAI 에게 답변 요청
-#    - 문서 내용과 사용자 질문을 함께 프롬프트에 넣는다. (Long Context 방식)
-#    - Phase 1 baseline 이므로 각 질문을 독립적으로 처리한다. (이전 대화 미포함)
-# -----------------------------------------------------------------------------
-def ask_openai(client, document_text, question):
-    """ 문서 내용 + 질문을 프롬프트로 만들어 OpenAI 답변을 받는다. """
-    system_prompt = (
-        "너는 업로드된 문서를 근거로 답하는 도우미야. "
-        "반드시 문서 내용에 기반해서 답하고, 문서에 없는 내용은 추측하지 말고 "
-        "'문서에서 찾을 수 없습니다'라고 답해줘. 한국어로 친절하게 답해줘."
-    )
-    user_prompt = (
-        "[문서 내용]\n"
-        f"{document_text}\n\n"
-        "[질문]\n"
-        f"{question}"
-    )
-
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
-    return response.choices[0].message.content
 
 
 # -----------------------------------------------------------------------------
@@ -378,6 +286,14 @@ def render_rag_tab():
             return
 
     st.markdown(result.text)
+
+    # 왜 느린지 가시화 — 단계별 소요시간(검색 vs 답변 생성)
+    tm = result.timings or {}
+    st.caption(
+        f"⏱ 처리 시간 — 검색 {tm.get('retrieval', 0)}s · 답변 생성 {tm.get('generate', 0)}s "
+        f"· 합계 **{tm.get('total', 0)}s** (대부분 LLM 답변 생성에서 소요)"
+    )
+
     with st.expander(f"📎 근거 출처 {len(result.hits)}건 보기"):
         for i, h in enumerate(result.hits, start=1):
             st.markdown(
@@ -520,16 +436,25 @@ def render_status_panel(ctx: dict) -> None:
 
 def render_log_panel() -> None:
     st.divider()
-    with st.expander("🩺 시스템 로그 (앱)", expanded=False):
+    with st.expander("🩺 시스템 로그", expanded=False):
+        # (1) 진행 중인 인제스트 단계의 실시간 로그(run 로그)
+        ing = st.session_state.get("ingest")
+        if ing:
+            key = ing["order"][min(ing["idx"], len(ing["order"]) - 1)]
+            runlog = pipeline.step_log_path(ing["run_id"], key)
+            st.caption(f"인제스트 run 로그: {runlog.name}")
+            st.code(pipeline.tail(runlog, 30) or "(아직 없음)", language="log")
+
+        # (2) 앱 로그
         lf = st.session_state.get("logfile")
+        st.caption(f"앱 로그: {lf}")
         if lf and Path(lf).exists():
             tail = "\n".join(
-                Path(lf).read_text(encoding="utf-8", errors="replace").splitlines()[-40:]
+                Path(lf).read_text(encoding="utf-8", errors="replace").splitlines()[-30:]
             )
             st.code(tail or "(로그 비어 있음)", language="log")
-            st.caption(f"파일: {lf}")
         else:
-            st.caption("로그 파일이 아직 없습니다.")
+            st.caption("앱 로그 파일이 아직 없습니다.")
 
 
 # -----------------------------------------------------------------------------
@@ -564,15 +489,112 @@ def render_step_upload(ctx: dict) -> None:
         st.caption("아직 없습니다.")
 
 
+def _ingest_init(pdf_name: str) -> None:
+    """ 인제스트 체인 상태를 초기화하고 첫 단계를 띄운다. """
+    st.session_state.ingest = {
+        "run_id": pipeline.new_run_id(),
+        "pdf": pdf_name,
+        "order": [s.key for s in pipeline.INGEST_STEPS],
+        "idx": 0, "status": "running",
+        "started": {}, "ended": {}, "rc": {},
+    }
+    _ingest_launch_current()
+
+
+def _ingest_launch_current() -> None:
+    ing = st.session_state.ingest
+    key = ing["order"][ing["idx"]]
+    ing["started"][key] = time.time()
+    proc = pipeline.launch(ing["run_id"], key, pdf_name=ing["pdf"] if key == "extract" else None)
+    st.session_state.ingest_proc = proc
+    log.info("인제스트 단계 시작: %s (run=%s)", key, ing["run_id"])
+
+
+@st.fragment(run_every=2)
+def _ingest_monitor() -> None:
+    """ 2초마다 현재 단계의 진행/로그를 갱신하고, 끝나면 다음 단계로 넘긴다. """
+    ing = st.session_state.get("ingest")
+    if not ing:
+        return
+    order, idx = ing["order"], ing["idx"]
+    proc = st.session_state.get("ingest_proc")
+
+    # 진행 중인 단계가 끝났으면 상태 전이(다음 단계 launch 또는 완료/에러)
+    if ing["status"] == "running" and proc is not None and not pipeline.alive(proc):
+        key = order[idx]
+        ing["ended"][key] = time.time()
+        ing["rc"][key] = proc.returncode
+        log.info("인제스트 단계 종료: %s rc=%s", key, proc.returncode)
+        if proc.returncode != 0:
+            ing["status"] = "error"
+        else:
+            ing["idx"] += 1
+            if ing["idx"] >= len(order):
+                ing["status"] = "done"
+            else:
+                _ingest_launch_current()
+
+    # 진행 표시
+    done = ing["idx"]
+    total = len(order)
+    frac = 1.0 if ing["status"] == "done" else min((done + 0.5) / total, 0.99)
+    st.progress(frac, text=f"인제스트: {ing['status']} — {done}/{total} 단계 완료")
+
+    for i, k in enumerate(order):
+        s = pipeline.STEP_BY_KEY[k]
+        if k in ing["ended"]:
+            dt = ing["ended"][k] - ing["started"][k]
+            mark = "✅" if ing["rc"].get(k) == 0 else "❌"
+            st.write(f"{mark} {s.title} — {dt:.1f}s")
+        elif i == done and ing["status"] == "running":
+            dt = time.time() - ing["started"].get(k, time.time())
+            st.write(f"▶ {s.title} … 진행 중 ({dt:.0f}s)")
+            tail = pipeline.tail(pipeline.step_log_path(ing["run_id"], k), 20)
+            st.code(tail or "(시작 중…)", language="log")
+        else:
+            st.write(f"⏳ {s.title}")
+
+    if ing["status"] == "done":
+        st.success("✅ 인제스트 완료! 3단계(검수)에서 확인 후 4단계(인덱싱)로 진행하세요.")
+    elif ing["status"] == "error":
+        st.error(f"⛔ '{order[done]}' 단계 실패 (아래 🩺 시스템 로그/해당 단계 로그 확인). 원인 해결 후 다시 실행하세요.")
+    elif ing["status"] == "cancelled":
+        st.warning("취소되었습니다.")
+
+
 def render_step_ingest(ctx: dict) -> None:
     st.subheader("⚙️ 2단계 · 인제스트 (추출 → 표준화 → 정제 → 검수 큐)")
     st.caption(
-        "업로드한 PDF에서 수치를 추출하고 표준화·정제해 검수 큐까지 만듭니다. "
-        "⚠️ 표준화는 `outputs/*.extracted.jsonl` 전체를 다시 처리하므로 여러 연도가 있으면 시간이 걸립니다."
+        "선택한 PDF에서 수치를 추출하고 표준화·정제해 검수 큐까지 만듭니다. "
+        "⚠️ 표준화 이후는 `outputs/*.extracted.jsonl` 전체를 다시 처리하므로 여러 연도가 있으면 시간이 걸립니다."
     )
-    st.info("이 단계의 **실시간 진행/로그 연결은 다음 증분(6)**에서 붙입니다. "
-            "현재는 산출물(검수 큐)이 있으면 3·4단계로 진행할 수 있습니다.")
-    st.write(f"검수 큐 존재: {'예' if ctx['review_queue'] else '아니오'}")
+
+    pdfs = _data_pdfs()
+    if not pdfs:
+        st.warning("먼저 1단계에서 PDF를 업로드하세요.")
+        return
+
+    sel = st.selectbox("추출할 PDF", [p.name for p in pdfs])
+    ing = st.session_state.get("ingest")
+    running = bool(ing and ing["status"] == "running")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("▶ 전체 실행", disabled=running, key="ingest_run"):
+            _ingest_init(sel)
+            st.rerun()
+    with c2:
+        if st.button("■ 취소", disabled=not running, key="ingest_cancel"):
+            proc = st.session_state.get("ingest_proc")
+            if proc is not None:
+                pipeline.cancel(proc)
+            if ing:
+                ing["status"] = "cancelled"
+            log.info("인제스트 취소")
+            st.rerun()
+
+    if ing:
+        _ingest_monitor()
 
 
 def render_step_index(ctx: dict) -> None:
@@ -595,9 +617,25 @@ def render_step_index(ctx: dict) -> None:
                     st.write(f"- {it}")
                 st.caption(f"↳ {c.fix_hint}")
 
-    # 실제 인덱싱 실행은 다음 증분(7)에서 연결. 지금은 게이트로 버튼 활성/비활성만.
-    st.button("📚 인덱싱 실행", disabled=not rep.ok, key="run_index",
-              help=None if rep.ok else "준비 게이트를 통과해야 활성화됩니다.")
+    # 게이트 통과 시에만 인덱싱 실행(추측은 데이터가 아니다 — 확정 사실만 인덱싱).
+    if st.button("📚 인덱싱 실행", disabled=not rep.ok, key="run_index",
+                 help=None if rep.ok else "준비 게이트를 통과해야 활성화됩니다."):
+        with st.status("인덱싱 중…", expanded=True) as status:
+            try:
+                from rag import chunking
+                from rag import index as indexmod
+                st.write("청킹(확정 사실 → 청크)…")
+                chunks = chunking.build_chunks(chunking.load_rows())
+                chunking.save_chunks(chunks)
+                st.write(f"청크 {len(chunks)}개 — 임베딩·Chroma 인덱싱…")
+                n = indexmod.build_index(reset=True)
+                log.info("인덱싱 완료: %d 청크", n)
+                status.update(label=f"✅ 인덱싱 완료: {n} 청크", state="complete")
+            except Exception as error:
+                log.exception("인덱싱 실패")
+                status.update(label=f"⛔ 인덱싱 실패: {error}", state="error")
+        st.rerun()
+
     st.write(f"현재 인덱스 청크: {ctx['index_count']}")
 
 

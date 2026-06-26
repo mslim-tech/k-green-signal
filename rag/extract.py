@@ -169,6 +169,16 @@ def _build_user_prompt(block: QuestionBlock) -> str:
 
 def _call_llm(client: OpenAI, user_prompt: str, model: str, retries: int = 2) -> dict:
     """ LLM 을 호출해 스키마에 맞는 dict 를 받는다. 실패하면 안전한 기본값을 돌려준다. """
+    # 테스트/검증 모드: 실제 LLM 호출 없이 즉시 결정적 스텁 반환(무료·빠름).
+    if os.getenv("RAG_FAKE_LLM"):
+        return {
+            "question_summary": "(테스트 스텁) 문항 요약",
+            "response_items": [{"label": "테스트응답", "value": 100.0}],
+            "base_n": 1000, "unit": "%", "multi_response": False,
+            "prev_year_note": None, "extraction_confidence": "high",
+            "warning": None,
+        }
+
     last_error = None
     for _ in range(retries):
         try:

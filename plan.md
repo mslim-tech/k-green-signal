@@ -12,6 +12,8 @@
 > **비전 추출**(`extract_vision.py`, 깨진 표 복원 → 검토 후보 라우팅) ·
 > **6단계 RAG 기본**(청킹→Chroma 인덱싱→검색→근거 인용 답변, `app.py` RAG 탭).
 >
+> **앱 재설계 완료(2026-06-26)**: `app.py`를 **가이드 스텝퍼**(업로드→인제스트→검수→(엄격 게이트)→인덱싱→**단일 RAG Q&A**)로 재작성. 🩺 시스템 로그 패널·단계별 진행/소요시간·데이터 상태 패널. 검증 하네스: `rag/logging_setup.py`·`rag/validate.py`·`rag/pipeline.py` + **Playwright `tests/e2e` 7 passed**. (`RAG_FAKE_LLM`로 결정적). 상세 로그는 [`logging.md`](./logging.md).
+>
 > ### 설계 원칙: "추측은 데이터가 아니다"
 > 문서에 실제 있는 것만 출처와 함께 DB에. LLM·휴리스틱의 불확실 판단은 검토 후보로만(자동 반영 금지),
 > 사람이 출처 보고 `corrections.jsonl`로 확정. 답변은 grounding에 근거(근거 없으면 "찾을 수 없음").
