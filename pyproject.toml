@@ -1,7 +1,7 @@
 [project]
-name = "rag-lab"
+name = "k-green-signal"
 version = "0.1.0"
-description = "Add your description here"
+description = "대한민국 친환경 소비 인지도 실시간 신호등 — 친환경 인지도 조사 PDF를 근거 기반 정형 데이터셋으로 통합하는 파이프라인"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

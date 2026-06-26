@@ -1,13 +1,27 @@
-# RAG Lab 진행 계획 (plan.md)
+# k-green-signal 진행 계획 (plan.md)
 
+> 프로젝트: **대한민국 친환경 소비 인지도 실시간 신호등 (k-green-signal)**
 > 목표: 「친환경 생활·소비 국민 인지도 조사」 결과보고서(총 14개년: 2007, 2013~2025)를
-> **정형 디지털 데이터셋(Long-format)** 으로 통합한다.
+> **근거 기반 정형 데이터셋(Long-format)** 으로 통합하고, 그 위에 근거 인용 질의응답을 올린다.
 > 추출 범위는 우선 **'전체(국민 전체)' 핵심수치만** (하위집단 교차표는 추후).
 >
-> 갱신: 2026-06-26 · 방식: **연도별로 하나씩** 추가 (전체만 + 본문 서술 추출)
-> 현재 완료: **2023·2024·2025** 추출+표준화 + **4.1~4.4 전부 완료**(3개년).
-> 2023은 단일 통합 PDF(84블록). 4.2 dedup 후 통합 CSV 858행, 표준문항 104개. 검수 큐 289행(중복키 0).
-> **4단계(데이터 정제) 완료.** 다음: 5단계 검수 UI(`app.py`) 또는 8단계 옛 연도 확장.
+> 갱신: 2026-06-26 · 현재 완료: **2023·2024·2025 0~5단계**.
+> dedup 후 통합 CSV 858행, 표준문항 104개, 검수 큐 289행.
+>
+> **완료**: 0~4단계(정제) · **5단계 검수 UI**(`app.py` 검수 탭 + `corrections.jsonl`, 다중 업로드) ·
+> **비전 추출**(`extract_vision.py`, 깨진 표 복원 → 검토 후보 라우팅).
+> **다음**: **6단계 RAG**(청킹→Chroma 인덱싱→검색→근거 인용 답변) — 설계는 [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+>
+> ### 설계 원칙: "추측은 데이터가 아니다"
+> 문서에 실제 있는 것만 출처와 함께 DB에. LLM·휴리스틱의 불확실 판단은 검토 후보로만(자동 반영 금지),
+> 사람이 출처 보고 `corrections.jsonl`로 확정. 답변은 grounding에 근거(근거 없으면 "찾을 수 없음").
+>
+> **6단계 세부 (다음 작업)**:
+> - 6.1 `chunking.py` — 문항-서술 청크 + 정형-사실 청크, 출처 메타(source/page/표번호) 부착
+> - 6.2 `index.py` — `text-embedding-3-small` → Chroma 인덱스(`outputs/chroma/`)
+> - 6.3 `retriever.py` — 벡터 top-k 검색(+옵션 하이브리드/rerank)
+> - 6.6 `answer.py`/app.py — 검색 청크만 근거로 **page 인용** 답변, 없으면 "찾을 수 없음"
+> - 6.8 `eval/` — 검색·인용 품질 평가 질문
 
 ---
 
@@ -55,12 +69,14 @@
 
 ---
 
-## 5단계: 검수 UI (Streamlit) (엄밀히 정의됨)
+## 5단계: 검수 UI (Streamlit)  (진행 중 — 5.1~5.3 완료)
 
-- [ ] 5.1 `app.py`에 "검수" 탭 추가 (기존 Q&A와 분리)
-- [ ] 5.2 `review_queue.csv`를 표로 표시, 행 선택 시 원본 PDF 페이지/그림 캡션 함께 보기
-- [ ] 5.3 사람이 값 수정 → `outputs/corrections.jsonl`에 저장
-- [ ] 5.4 정제 재실행 시 corrections를 우선 반영
+- [x] 5.1 `app.py`에 "🔍 검수" 탭 추가 (기존 Q&A와 `st.tabs`로 분리). Q&A는 API Key 필요, 검수는 Key 없이도 동작.
+- [x] 5.2 `review_queue.csv`(289행)를 `st.dataframe`(single-row 선택)으로 표시 → 행 선택 시 상세 패널(문항요약·값·플래그 풀이·`source_locator`). **단 원본 PDF 페이지 렌더링은 아직 텍스트 위치(파일+페이지)만**; 이미지 표시는 추후.
+- [x] 5.3 사람이 값 확인/수정 → `rag/corrections.py`가 `outputs/corrections.jsonl`에 한 줄 append. status=fixed/confirmed/skip. 이미 검수한 행은 표에 ✅. 같은 행 재수정 시 최신이 이김.
+- [~] 5.4 재정제 반영: `corrections.apply_corrections(rows)` 함수는 완성(fixed만 덮어쓰고 원본 보존). **파이프라인 연결은 미완** — 검수 데이터가 쌓인 뒤 refine/flags 입력단에 끼울 예정.
+
+> 모듈: `rag/corrections.py`(stdlib만; row_key=(year,std_id,std_response_label)+field) · `app.py`(load_review_queue 캐시, render_review_tab/render_detail_and_edit/render_qa_tab + tabs main).
 
 ---
 

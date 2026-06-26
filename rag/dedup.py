@@ -43,8 +43,9 @@ DEDUP_CSV = OUTPUT_DIR / "standardized_long.dedup.csv"      # 4.2 산출
 LOG_CSV = OUTPUT_DIR / "dedup_log.csv"
 
 # --- A. 문항 분리 규칙 -------------------------------------------------------
-# over-merged std_id : [(subsection 에 들어있는 키워드, 새 std_id, 새 std_label), ...]
-#   블록의 subsection 이 키워드를 포함하면 그 새 std_id 로 보낸다. (안 맞으면 원래 std_id 유지)
+# over-merged std_id : [(키워드, 새 std_id, 새 std_label), ...]
+#   블록의 section/subsection 글자에 키워드가 들어 있으면 그 새 std_id 로 보낸다.
+#   (안 맞으면 원래 std_id 유지) — 같은 std_id 라도 연도/페이지마다 다른 문항이면 이렇게 갈라낸다.
 SPLIT_RULES: dict[str, list[tuple[str, str, str]]] = {
     "환경성적표지_구매유도요인": [
         ("환경표지 인증제품", "환경표지_구매유도요인", "환경표지 인증제품 구매 유도 요인"),
@@ -54,6 +55,13 @@ SPLIT_RULES: dict[str, list[tuple[str, str, str]]] = {
     ],
     "친환경고려_제품": [
         ("포인트 적립", "친환경소비_포인트적립_희망품목", "포인트 적립 희망 친환경 소비 품목"),
+    ],
+    # 2023 은 '확대 희망 친환경제품'(표 3-60)이지만, 2024·2025 의 같은 std_id 는
+    # '그린카드 포인트 적립 희망 품목'(다른 문항)으로 잘못 병합됨. 사용자 확인 결과
+    # 그 문항은 2023 의 '친환경소비_포인트적립_희망품목' 과 같은 문항 → 그쪽으로 합류시킨다.
+    # (구분자가 subsection 이 아니라 section 글자에 있어 section 까지 본다.)
+    "친환경제품_확대희망품목": [
+        ("그린카드 포인트 적립", "친환경소비_포인트적립_희망품목", "포인트 적립 희망 친환경 소비 품목"),
     ],
 }
 
@@ -107,10 +115,11 @@ def main() -> None:
         rules = SPLIT_RULES.get(r.get("std_id"))
         if not rules:
             continue
-        sub = r.get("subsection") or ""
+        # section 과 subsection 을 합친 글자에서 키워드를 찾는다(구분자가 둘 중 어디 있든 잡히게).
+        text = (r.get("section") or "") + " " + (r.get("subsection") or "")
         for keyword, new_id, new_label in rules:
-            if keyword in sub:
-                add_log("split", r, f"{r['std_id']} → {new_id} (subsection 키워드 '{keyword}')")
+            if keyword in text:
+                add_log("split", r, f"{r['std_id']} → {new_id} (키워드 '{keyword}')")
                 r["std_id"] = new_id
                 r["std_label"] = new_label
                 n_split += 1
