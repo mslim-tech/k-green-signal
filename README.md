@@ -1,16 +1,11 @@
 # 대한민국 친환경 소비 인지도 실시간 신호등
 
-> **k-green-signal** — 매년 발간되는 「친환경 생활·소비 국민 인지도 조사」 결과보고서(PDF)를
-> **근거 기반(grounded) 정형 데이터셋**으로 통합하고, 그 위에서 친환경 소비 인지도의
-> 변화를 **신호등처럼** 읽어내는 것을 목표로 합니다.
+**k-green-signal** — 매년 발간되는 「친환경 생활·소비 국민 인지도 조사」 결과보고서(PDF)를 **근거 기반(grounded) 정형 데이터셋**으로 통합하고, 그 위에서 친환경 소비 인지도의 변화를 **신호등처럼** 읽어내는 것을 목표로 합니다.
 
-<p>
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white">
-  <img alt="uv" src="https://img.shields.io/badge/uv-managed-DE5FE9?logo=uv&logoColor=white">
-  <img alt="OpenAI" src="https://img.shields.io/badge/OpenAI-gpt--5.4--mini-412991?logo=openai&logoColor=white">
-  <img alt="Streamlit" src="https://img.shields.io/badge/Streamlit-app-FF4B4B?logo=streamlit&logoColor=white">
-  <img alt="Chroma" src="https://img.shields.io/badge/VectorDB-Chroma-5A67D8">
-</p>
+![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-gpt--5.4--mini-412991?logo=openai&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-app-FF4B4B?logo=streamlit&logoColor=white)
+![Chroma](https://img.shields.io/badge/VectorDB-Chroma-5A67D8)
 
 ---
 
@@ -172,8 +167,16 @@ uv run streamlit run app.py
 
 ## 기술 스택
 
-Python 3.12 · uv · OpenAI (Chat + Vision + Embeddings) · PyMuPDF · pypdf ·
-python-docx · Streamlit · ChromaDB · tiktoken · python-dotenv
+![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
+![uv](https://img.shields.io/badge/uv-managed-DE5FE9?logo=astral&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-Chat%20·%20Vision%20·%20Embeddings-412991?logo=openai&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-app-FF4B4B?logo=streamlit&logoColor=white)
+![ChromaDB](https://img.shields.io/badge/ChromaDB-vector%20db-5A67D8)
+![PyMuPDF](https://img.shields.io/badge/PyMuPDF-PDF-007EC6)
+![pypdf](https://img.shields.io/badge/pypdf-PDF-007EC6)
+![python-docx](https://img.shields.io/badge/python--docx-DOCX-2B579A)
+![tiktoken](https://img.shields.io/badge/tiktoken-tokenizer-555555)
+![python-dotenv](https://img.shields.io/badge/python--dotenv-env-ECD53F?logoColor=black)
 
 ---
 
