@@ -337,6 +337,51 @@ def render_review_tab():
 
 
 # -----------------------------------------------------------------------------
+# 4b) RAG 데이터 질의 탭 (6단계) — 정형 데이터에서 검색 + 근거 인용 답변
+# -----------------------------------------------------------------------------
+def render_rag_tab():
+    st.subheader("🔎 데이터 질의 (RAG · 근거 인용)")
+    st.caption(
+        "정형화된 인지도 조사 데이터에서 검색해 **출처(파일·페이지)를 인용**해 답합니다. "
+        "근거가 없으면 '문서에서 찾을 수 없습니다'라고 답합니다."
+    )
+
+    c1, c2 = st.columns([3, 1])
+    with c2:
+        year = st.selectbox("연도 필터", ["전체", "2023", "2024", "2025"], index=0)
+    with c1:
+        question = st.text_input("질문", placeholder="예: 2024년 환경표지 정의 인지율은?")
+
+    if not question:
+        return
+
+    try:
+        from rag.answer import answer as rag_answer
+    except Exception as error:
+        st.error(f"RAG 모듈을 불러오지 못했습니다: {error}")
+        return
+
+    with st.spinner("검색하고 근거로 답하는 중..."):
+        try:
+            result = rag_answer(question, k=5, year=None if year == "전체" else year)
+        except Exception as error:
+            st.error(
+                f"검색/답변 중 오류: {error}\n\n"
+                "인덱스가 없다면 먼저 `uv run python rag/index.py` 를 실행하세요."
+            )
+            return
+
+    st.markdown(result.text)
+    with st.expander(f"📎 근거 출처 {len(result.hits)}건 보기"):
+        for i, h in enumerate(result.hits, start=1):
+            st.markdown(
+                f"**[{i}]** {h.metadata.get('year')}년 · `{h.metadata.get('std_id')}` "
+                f"— {h.locator} (유사도 {h.score})"
+            )
+            st.caption(h.text.replace("\n", " ")[:200] + " ...")
+
+
+# -----------------------------------------------------------------------------
 # 5) 문서 Q&A 탭 (기존 Baseline)
 # -----------------------------------------------------------------------------
 def render_qa_tab(client):
@@ -434,15 +479,24 @@ def main():
     api_key = get_api_key()
     client = OpenAI(api_key=api_key) if api_key else None
 
-    qa_tab, review_tab = st.tabs(["📄 문서 Q&A", "🔍 검수"])
+    rag_tab, qa_tab, review_tab = st.tabs(["🔎 데이터 질의(RAG)", "📄 문서 Q&A", "🔍 검수"])
+
+    no_key_msg = (
+        "OPENAI_API_KEY 를 찾을 수 없습니다.\n\n"
+        "프로젝트 폴더에 `.env` 파일을 만들고 아래 한 줄을 넣어주세요:\n\n"
+        "`OPENAI_API_KEY=sk-...`"
+    )
+
+    with rag_tab:
+        # RAG 검색·답변은 임베딩·답변에 API Key 가 필요하다.
+        if client is None:
+            st.error(no_key_msg)
+        else:
+            render_rag_tab()
 
     with qa_tab:
         if client is None:
-            st.error(
-                "OPENAI_API_KEY 를 찾을 수 없습니다.\n\n"
-                "프로젝트 폴더에 `.env` 파일을 만들고 아래 한 줄을 넣어주세요:\n\n"
-                "`OPENAI_API_KEY=sk-...`"
-            )
+            st.error(no_key_msg)
         else:
             render_qa_tab(client)
 

@@ -9,19 +9,21 @@
 > dedup 후 통합 CSV 858행, 표준문항 104개, 검수 큐 289행.
 >
 > **완료**: 0~4단계(정제) · **5단계 검수 UI**(`app.py` 검수 탭 + `corrections.jsonl`, 다중 업로드) ·
-> **비전 추출**(`extract_vision.py`, 깨진 표 복원 → 검토 후보 라우팅).
-> **다음**: **6단계 RAG**(청킹→Chroma 인덱싱→검색→근거 인용 답변) — 설계는 [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+> **비전 추출**(`extract_vision.py`, 깨진 표 복원 → 검토 후보 라우팅) ·
+> **6단계 RAG 기본**(청킹→Chroma 인덱싱→검색→근거 인용 답변, `app.py` RAG 탭).
 >
 > ### 설계 원칙: "추측은 데이터가 아니다"
 > 문서에 실제 있는 것만 출처와 함께 DB에. LLM·휴리스틱의 불확실 판단은 검토 후보로만(자동 반영 금지),
 > 사람이 출처 보고 `corrections.jsonl`로 확정. 답변은 grounding에 근거(근거 없으면 "찾을 수 없음").
 >
-> **6단계 세부 (다음 작업)**:
-> - 6.1 `chunking.py` — 문항-서술 청크 + 정형-사실 청크, 출처 메타(source/page/표번호) 부착
-> - 6.2 `index.py` — `text-embedding-3-small` → Chroma 인덱스(`outputs/chroma/`)
-> - 6.3 `retriever.py` — 벡터 top-k 검색(+옵션 하이브리드/rerank)
-> - 6.6 `answer.py`/app.py — 검색 청크만 근거로 **page 인용** 답변, 없으면 "찾을 수 없음"
-> - 6.8 `eval/` — 검색·인용 품질 평가 질문
+> **6단계 세부**:
+> - [x] 6.1 `chunking.py` — (year, std_id) 단위 사실 청크, 출처 메타 + corrections 반영. 198 청크.
+> - [x] 6.2 `index.py` — `text-embedding-3-small` → Chroma(`outputs/chroma/`, cosine).
+> - [x] 6.3 `retriever.py` — 벡터 top-k 검색(연도 필터), 유사도·출처 반환.
+> - [x] 6.6 `answer.py`/app.py — 검색 청크만 근거로 **출처 인용** 답변, 없으면 "찾을 수 없음".
+> - [ ] 6.4 질문 재작성(`REWRITE_MODEL`) · 6.5 rerank(`RERANKER_MODEL`) — 검색 정확도 개선(상위 청크 순위)
+> - [ ] 6.8 `eval/` — 검색·인용 품질 평가 질문셋
+> - [ ] (연계) 검토 후보(`vision_candidates.csv`)를 검수 탭에 노출 + 문항-서술 청크 추가
 
 ---
 
