@@ -62,6 +62,47 @@ INGEST_STEPS: list[Step] = [
 STEP_BY_KEY = {s.key: s for s in INGEST_STEPS}
 
 
+DATA_DIR = PROJECT_ROOT / "data"
+
+
+def _stem(pdf_name: str) -> str:
+    return Path(pdf_name).stem
+
+
+def step_output(step: Step, pdf_name: str | None) -> Path:
+    """ 이 단계가 만드는 산출 파일. extract 만 PDF 별(stem)로 다르다. """
+    if step.key == "extract":
+        return OUTPUT_DIR / f"{_stem(pdf_name)}.extracted.jsonl"
+    return OUTPUT_DIR / step.produces
+
+
+def step_inputs(step: Step, pdf_name: str | None) -> list[Path]:
+    """ 이 단계의 입력 파일들(이게 산출보다 새로우면 재실행 필요). """
+    if step.key == "extract":
+        return [DATA_DIR / pdf_name] if pdf_name else []
+    if step.key == "standardize":
+        return list(OUTPUT_DIR.glob("*.extracted.jsonl"))
+    chain = {
+        "refine": "standardized_long.csv",
+        "dedup": "standardized_long.clean.csv",
+        "flags": "standardized_long.dedup.csv",
+        "review": "standardized_long.flagged.csv",
+    }
+    name = chain.get(step.key)
+    return [OUTPUT_DIR / name] if name else []
+
+
+def is_fresh(step: Step, pdf_name: str | None) -> bool:
+    """ 산출이 이미 있고 모든 입력보다 새로우면 True(=이 단계는 건너뛰어도 됨). """
+    out = step_output(step, pdf_name)
+    if not out.exists():
+        return False
+    ins = step_inputs(step, pdf_name)
+    if not ins or not all(p.exists() for p in ins):
+        return False
+    return out.stat().st_mtime >= max(p.stat().st_mtime for p in ins)
+
+
 def new_run_id() -> str:
     return f"run_{datetime.now():%Y%m%d_%H%M%S}"
 

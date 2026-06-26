@@ -556,22 +556,47 @@ def render_step_upload(ctx: dict) -> None:
         st.caption("아직 없습니다.")
 
 
-def _ingest_init(pdf_name: str) -> None:
-    """ 인제스트 체인 상태를 초기화하고 첫 단계를 띄운다. """
+def _ingest_init(pdf_name: str, force: bool = False) -> None:
+    """ 인제스트 체인 상태를 초기화하고 첫 단계를 띄운다. force=True 면 스킵 없이 전부 재실행. """
     st.session_state.ingest = {
         "run_id": pipeline.new_run_id(),
         "pdf": pdf_name,
         "order": [s.key for s in pipeline.INGEST_STEPS],
         "idx": 0, "status": "running",
-        "started": {}, "ended": {}, "rc": {},
+        "started": {}, "ended": {}, "rc": {}, "skipped": [],
+        "force": force,
     }
     _ingest_launch_current()
 
 
+def _ingest_advance() -> None:
+    """ 다음 단계로 넘긴다(없으면 완료). """
+    ing = st.session_state.ingest
+    ing["idx"] += 1
+    if ing["idx"] >= len(ing["order"]):
+        ing["status"] = "done"
+        st.session_state.ingest_proc = None
+    else:
+        _ingest_launch_current()
+
+
 def _ingest_launch_current() -> None:
+    """ 현재 단계를 실행한다. D1: 입력이 최신이면 LLM 호출 없이 '스킵'하고 다음으로. """
     ing = st.session_state.ingest
     key = ing["order"][ing["idx"]]
+    step = pipeline.STEP_BY_KEY[key]
     ing["started"][key] = time.time()
+
+    # 스킵 캐시: 강제 재실행이 아니고 산출이 최신이면 건너뛴다(연쇄적으로).
+    if not ing.get("force") and pipeline.is_fresh(step, ing["pdf"]):
+        ing["ended"][key] = ing["started"][key]
+        ing["rc"][key] = 0
+        ing["skipped"].append(key)
+        st.session_state.ingest_proc = None
+        log.info("인제스트 단계 스킵(최신): %s", key)
+        _ingest_advance()
+        return
+
     proc = pipeline.launch(ing["run_id"], key, pdf_name=ing["pdf"] if key == "extract" else None)
     st.session_state.ingest_proc = proc
     log.info("인제스트 단계 시작: %s (run=%s)", key, ing["run_id"])
@@ -595,11 +620,7 @@ def _ingest_monitor() -> None:
         if proc.returncode != 0:
             ing["status"] = "error"
         else:
-            ing["idx"] += 1
-            if ing["idx"] >= len(order):
-                ing["status"] = "done"
-            else:
-                _ingest_launch_current()
+            _ingest_advance()
 
     # 진행 표시
     done = ing["idx"]
@@ -610,6 +631,9 @@ def _ingest_monitor() -> None:
     for i, k in enumerate(order):
         s = pipeline.STEP_BY_KEY[k]
         if k in ing["ended"]:
+            if k in ing.get("skipped", []):
+                st.write(f"⏭️ {s.title} — 스킵(최신)")
+                continue
             dt = ing["ended"][k] - ing["started"][k]
             mark = "✅" if ing["rc"].get(k) == 0 else "❌"
             st.write(f"{mark} {s.title} — {dt:.1f}s")
@@ -642,13 +666,15 @@ def render_step_ingest(ctx: dict) -> None:
         return
 
     sel = st.selectbox("추출할 PDF", [p.name for p in pdfs])
+    force = st.checkbox("강제 재실행(스킵 안 함)", value=False,
+                        help="끄면 산출이 최신인 단계는 건너뜁니다(빠름). 켜면 전부 다시 실행합니다.")
     ing = st.session_state.get("ingest")
     running = bool(ing and ing["status"] == "running")
 
     c1, c2 = st.columns(2)
     with c1:
         if st.button("▶ 전체 실행", disabled=running, key="ingest_run"):
-            _ingest_init(sel)
+            _ingest_init(sel, force=force)
             st.rerun()
     with c2:
         if st.button("■ 취소", disabled=not running, key="ingest_cancel"):
