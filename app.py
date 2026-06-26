@@ -91,6 +91,19 @@ def effective_value(row, latest):
     return row.get("value", "")
 
 
+def needs_value(row, latest) -> bool:
+    """ 이 행이 '값이 비어 반드시 검수해야 하는' 행인가.
+        반영값(정정 포함)이 숫자로 읽히지 않으면 True. """
+    v = (effective_value(row, latest) or "").strip()
+    if not v:
+        return True
+    try:
+        float(v)
+        return False
+    except ValueError:
+        return True
+
+
 def render_detail_and_edit(row, latest):
     """ 선택한 행의 상세 정보 + 수정 폼을 그린다. """
     st.divider()
@@ -183,6 +196,16 @@ def render_review_tab():
     reviewed = corrections.reviewed_keys(recs)
     latest = corrections.latest_by_key(recs)
 
+    # --- D3: 값이 비어 반드시 검수해야 하는 행 안내(직접 찾지 않게) ---
+    blank_rows = [r for r in queue if needs_value(r, latest)]
+    if blank_rows:
+        st.warning(
+            f"⚠️ **값이 비어 검수가 필요한 행: {len(blank_rows)}건** — "
+            "아래 '값 없는 행만 보기'로 모아 보고, 행을 골라 값을 채워주세요."
+        )
+    only_blank = st.checkbox("값 없는 행만 보기", value=bool(blank_rows),
+                             help="반영값이 비었거나 숫자가 아닌 행만 표시합니다.")
+
     # --- 필터 ---
     years = sorted({(r.get("year") or "") for r in queue})
     reasons_all = sorted({
@@ -200,6 +223,8 @@ def render_review_tab():
         hide_done = st.checkbox("미검수만 보기", value=False)
 
     def keep(r):
+        if only_blank and not needs_value(r, latest):
+            return False
         if r.get("review_priority") not in f_priority:
             return False
         if (r.get("year") or "") not in f_year:
@@ -211,8 +236,10 @@ def render_review_tab():
         return True
 
     filtered = [r for r in queue if keep(r)]
+    # 값 없는 행을 맨 위로(검수 우선) — 그 안에서는 원래 순서 유지(stable).
+    filtered.sort(key=lambda r: 0 if needs_value(r, latest) else 1)
     done_n = sum(1 for r in queue if corrections.row_key(r) in reviewed)
-    st.caption(f"표시 {len(filtered)}행 / 전체 {len(queue)}행 · 검수 완료 {done_n}행")
+    st.caption(f"표시 {len(filtered)}행 / 전체 {len(queue)}행 · 검수 완료 {done_n}행 · 값없음 {len(blank_rows)}행")
 
     if not filtered:
         st.info("필터에 해당하는 행이 없습니다.")
@@ -230,6 +257,7 @@ def render_review_tab():
                 eff = effective_value(r, latest)
                 # 정정으로 값이 바뀐 경우만 따로 표시(같으면 빈칸으로 두어 시선 분산 방지).
                 row_view["정정값"] = eff if eff != (r.get("value", "")) else ""
+        row_view["확인필요"] = "🔴" if needs_value(r, latest) else ""
         row_view["검수"] = "✅" if corrections.row_key(r) in reviewed else ""
         table_rows.append(row_view)
     df = pd.DataFrame(table_rows)
