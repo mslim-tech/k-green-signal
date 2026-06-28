@@ -74,6 +74,8 @@ def load_rows() -> list[dict]:
     rows += corrections.confirmed_only_rows(rows)
     # 사람이 확정한 '같은 문항' 별칭으로 연도 간 std_id/라벨을 통일(시계열 연결).
     rows = std_aliases.apply_aliases(rows)
+    # 옛 연도에 없는 집계(예: 인지도)를 명시 정의대로 구성 보기 합으로 도출(시대 연결).
+    rows = std_aliases.derive_aggregates(rows)
     return rows
 
 

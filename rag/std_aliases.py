@@ -32,16 +32,106 @@ STD_ID_ALIASES: dict[str, str] = {
     "환경표지_재구매의향": "환경표지_우선구매의향",  # #2
 }
 
+# 용어 정규화: 같은 제도가 연도마다 다른 이름으로 불린 것을 한 용어로 통일한다.
+#   탄소성적표지(2015~16)·탄소발자국(2017~19) = 환경성적표지(2020~)  (사용자 확정)
+#   std_id·std_label 의 '부분 문자열'을 치환 → 그 제도 문항이 연도 간 같은 std_id 로 모임.
+#   ('저탄소제품'은 이 용어를 포함하지 않으므로 영향 없음.)
+STD_ID_TERM_MAP: dict[str, str] = {
+    "탄소성적표지": "환경성적표지",
+    "탄소발자국": "환경성적표지",
+}
+
+
+def _normalize_terms(text: str) -> str:
+    for old, new in STD_ID_TERM_MAP.items():
+        if old in text:
+            text = text.replace(old, new)
+    return text
+
 # canonical std_id → 통합 후 보여줄 std_label(있으면 그 라벨로 통일)
 STD_LABEL_CANON: dict[str, str] = {
     "환경표지_우선구매이유": "환경표지 인증제품 우선 구매 이유",
     "환경표지_우선구매의향": "환경표지 인증제품 우선 구매 의향",
 }
 
-# canonical std_id → {옛 응답라벨: 통일 응답라벨} (값 비교 가능한 단일응답만 정렬)
+# std_id → {응답라벨 변형: 통일(canonical) 응답라벨}
+#   연도 간 시대가 달라 같은 보기를 다르게 적은 것을 한 라벨로 모아 시계열을 잇는다.
+#   - #2: 단일응답 이진 통일.
+#   - 라벨 드리프트(2026-06-28): 옛(2018~22 '[관심]' 등 대괄호 집계)·최근(2023~25
+#     '관심 있음(1+2)' 등) 긍정/부정 '집계'를 한 라벨로 통일(척도 보기는 그대로 둠).
+#     집계가 원문에 이미 있는 문항만(인지도류=옛 집계 누락은 별도 도출 과제).
 RESPONSE_LABEL_ALIASES: dict[str, dict[str, str]] = {
     "환경표지_우선구매의향": {"의향 있음": "구매 의향 있음"},   # #2
+    "환경문제_관심도": {
+        "[관심]": "관심 있음", "관심 있음(1+2)": "관심 있음",
+        "[무관심]": "관심 없음", "관심 없음(3+4)": "관심 없음",
+    },
+    "친환경제품_관심도": {
+        "[관심]": "관심 있음", "관심 있음(다소+매우)": "관심 있음",
+        "[무관심]": "관심 없음", "관심 없음(별로+전혀)": "관심 없음",
+    },
+    "환경문제_민감도": {
+        "[민감함]": "민감함", "민감함(3+4)": "민감함",
+        "[민감하지 않음]": "민감하지 않음", "민감하지 않음(1+2)": "민감하지 않음",
+    },
+    "친환경제품_구매경험": {
+        "있다": "구매 경험 있음", "녹색제품을 구매한 경험이 있다": "구매 경험 있음",
+        "없다": "구매 경험 없음", "녹색제품을 구매한 경험이 없다": "구매 경험 없음",
+    },
+    "환경표지_전반신뢰도": {
+        "[신뢰]": "신뢰", "신뢰한다(매우+다소)": "신뢰", "[불신]": "불신",
+    },
+    # 인지도: 최근 집계 라벨을 '인지'/'비인지'로 통일(옛은 아래 DERIVE 로 도출해 맞춤).
+    "환경표지_인지도": {
+        "인지함(잘 알고 있다+조금 알고 있다+본 적은 있다)": "인지",
+        "비인지(전혀 모른다/처음 본다)": "비인지",
+    },
 }
+
+
+# 옛 연도에 '집계' 행이 없을 때, 명시된 구성 보기들의 합으로 집계를 '도출'한다.
+#   - 도출은 산술(합)일 뿐 추측이 아니다. 단, 최근의 집계 '정의'가 명시된 문항만 한다
+#     (예: 환경표지_인지도 = 인지함(잘+조금+본적)). 정의가 모호한 문항은 넣지 않는다.
+#   std_id → {"label": 도출 라벨, "components": [합칠 보기들]}
+DERIVE_AGGREGATES: dict[str, dict] = {
+    "환경표지_인지도": {"label": "인지",
+                       "components": ["잘 알고 있다", "조금 알고 있다", "본 적은 있다"]},
+}
+
+
+def derive_aggregates(rows: list[dict]) -> list[dict]:
+    """ 설정된 std_id 에 대해, 연도별로 구성 보기 합을 도출 라벨 행으로 추가한다
+        (이미 그 라벨이 있으면 건너뜀 — 최근 연도는 통일된 집계가 이미 있음). """
+    if not DERIVE_AGGREGATES:
+        return rows
+    from collections import defaultdict
+    # (std_id, year) → {label: (value, sample_row)}
+    by_key: dict[tuple, dict[str, tuple]] = defaultdict(dict)
+    for r in rows:
+        sid = (r.get("std_id") or "").strip()
+        if sid in DERIVE_AGGREGATES:
+            lbl = (r.get("std_response_label") or "").strip()
+            try:
+                val = float((r.get("value") or "").strip())
+            except (TypeError, ValueError):
+                continue
+            by_key[(sid, r.get("year"))][lbl] = (val, r)
+    added: list[dict] = []
+    for (sid, year), labels in by_key.items():
+        cfg = DERIVE_AGGREGATES[sid]
+        if cfg["label"] in labels:           # 이미 집계 있음(최근) → 도출 불필요
+            continue
+        comps = [labels[c] for c in cfg["components"] if c in labels]
+        if len(comps) != len(cfg["components"]):   # 구성 보기가 다 있어야 도출
+            continue
+        total = round(sum(v for v, _ in comps), 1)
+        sample = comps[0][1]
+        nr = dict(sample)
+        nr["std_response_label"] = cfg["label"]
+        nr["response_label"] = cfg["label"]
+        nr["value"] = str(total)          # 다른 행과 같은 문자열 형식
+        added.append(nr)
+    return rows + added
 
 
 def apply_aliases(rows: list[dict]) -> list[dict]:
@@ -52,18 +142,20 @@ def apply_aliases(rows: list[dict]) -> list[dict]:
     out: list[dict] = []
     for r in rows:
         sid = (r.get("std_id") or "").strip()
-        canon = STD_ID_ALIASES.get(sid, sid)
-        if canon == sid and canon not in STD_LABEL_CANON and canon not in RESPONSE_LABEL_ALIASES:
-            out.append(r)                       # 손댈 게 없으면 그대로
+        canon = _normalize_terms(STD_ID_ALIASES.get(sid, sid))   # 별칭 + 용어 정규화
+        label = (r.get("std_label") or "")
+        label_canon = STD_LABEL_CANON.get(canon, _normalize_terms(label))
+        lbl_map = RESPONSE_LABEL_ALIASES.get(canon)
+        cur_resp = (r.get("std_response_label") or "").strip()
+        resp_new = lbl_map.get(cur_resp) if lbl_map else None
+        # 바뀐 게 없으면 원본 그대로(부수효과 최소화)
+        if canon == sid and label_canon == label and resp_new is None:
+            out.append(r)
             continue
         nr = dict(r)
         nr["std_id"] = canon
-        if canon in STD_LABEL_CANON:
-            nr["std_label"] = STD_LABEL_CANON[canon]
-        lbl_map = RESPONSE_LABEL_ALIASES.get(canon)
-        if lbl_map:
-            cur = (nr.get("std_response_label") or "").strip()
-            if cur in lbl_map:
-                nr["std_response_label"] = lbl_map[cur]
+        nr["std_label"] = label_canon
+        if resp_new is not None:
+            nr["std_response_label"] = resp_new
         out.append(nr)
     return out

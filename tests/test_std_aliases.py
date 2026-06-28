@@ -51,6 +51,59 @@ def test_response_label_alias_connects_series():
     assert s.latest.value == 93.8
 
 
+def test_term_normalize_carbon_to_epd():
+    # 탄소성적표지·탄소발자국 → 환경성적표지 (std_id·std_label 둘 다)
+    rows = [
+        {"std_id": "탄소성적표지_인지도", "std_label": "탄소성적표지 인지도",
+         "std_response_label": "인지", "year": "2015", "value": "50.0", "unit": "%"},
+        {"std_id": "탄소발자국_인지도", "std_label": "탄소발자국 인지도",
+         "std_response_label": "인지", "year": "2018", "value": "60.0", "unit": "%"},
+    ]
+    out = std_aliases.apply_aliases(rows)
+    assert {r["std_id"] for r in out} == {"환경성적표지_인지도"}
+    assert all("환경성적표지" in r["std_label"] for r in out)
+    # 저탄소제품은 영향 없음
+    assert std_aliases._normalize_terms("저탄소제품_인지도") == "저탄소제품_인지도"
+
+
+def test_response_canon_connects_eras():
+    rows = [
+        {"std_id": "환경문제_관심도", "std_response_label": "[관심]",
+         "year": "2020", "value": "90.8", "unit": "%"},
+        {"std_id": "환경문제_관심도", "std_response_label": "관심 있음(1+2)",
+         "year": "2024", "value": "96.4", "unit": "%"},
+    ]
+    out = std_aliases.apply_aliases(rows)
+    assert {r["std_response_label"] for r in out} == {"관심 있음"}
+
+
+def test_derive_aggregates_sums_components():
+    rows = [
+        {"std_id": "환경표지_인지도", "std_response_label": "잘 알고 있다",
+         "year": "2018", "value": "10.0", "unit": "%"},
+        {"std_id": "환경표지_인지도", "std_response_label": "조금 알고 있다",
+         "year": "2018", "value": "30.0", "unit": "%"},
+        {"std_id": "환경표지_인지도", "std_response_label": "본 적은 있다",
+         "year": "2018", "value": "43.9", "unit": "%"},
+    ]
+    out = std_aliases.derive_aggregates(rows)
+    derived = [r for r in out if r["std_response_label"] == "인지"]
+    assert len(derived) == 1
+    assert float(derived[0]["value"]) == 83.9 and derived[0]["year"] == "2018"
+
+
+def test_derive_skips_when_aggregate_exists():
+    rows = [
+        {"std_id": "환경표지_인지도", "std_response_label": "인지",
+         "year": "2023", "value": "90.7", "unit": "%"},
+        {"std_id": "환경표지_인지도", "std_response_label": "잘 알고 있다",
+         "year": "2023", "value": "20.0", "unit": "%"},
+    ]
+    # 이미 '인지'가 있으면(최근) 도출하지 않는다 → 중복 없음
+    assert len([r for r in std_aliases.derive_aggregates(rows)
+                if r["std_response_label"] == "인지"]) == 1
+
+
 def test_untouched_rows_passthrough():
     rows = [{"std_id": "녹색제품_인지도", "std_label": "녹색제품 인지도",
              "std_response_label": "인지", "year": "2024", "value": "55.0", "unit": "%"}]
