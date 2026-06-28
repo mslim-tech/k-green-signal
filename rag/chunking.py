@@ -26,9 +26,9 @@ from collections import defaultdict
 from pathlib import Path
 
 try:
-    from rag import corrections
+    from rag import corrections, std_aliases
 except ImportError:
-    import corrections
+    import corrections, std_aliases
 
 try:
     import tiktoken
@@ -72,6 +72,8 @@ def load_rows() -> list[dict]:
     # 추출이 깨져 소스에서 사라졌지만 사람이 PDF 대조로 확정한 표(예: 2023 표 3-60
     # '친환경제품 확대 희망')를 복원해 인덱스에 포함한다(확정값만, 지어내지 않음).
     rows += corrections.confirmed_only_rows(rows)
+    # 사람이 확정한 '같은 문항' 별칭으로 연도 간 std_id/라벨을 통일(시계열 연결).
+    rows = std_aliases.apply_aliases(rows)
     return rows
 
 
