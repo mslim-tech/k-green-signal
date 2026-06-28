@@ -45,16 +45,8 @@ MAP_FILE = STAGING / "std_mapping.json"     # 결정적 매핑(저장/재사용)
 CLEAN_COLUMNS = LONG_CSV_COLUMNS[:5] + ["std_response_label"] + LONG_CSV_COLUMNS[5:]
 
 # 매핑 정제: LLM 이 '다른 문항'을 같은 std_id 로 과병합하는 것을 문항(subsection)
-# 키워드로 강제 교정한다. 위에서부터 첫 매치를 쓴다. (충돌·과병합 해소)
-#   all: 모두 포함 / any: 하나 이상 / without: 하나라도 있으면 제외
-STDID_OVERRIDES: list[dict] = [
-    # '관심 증가'(전년 대비 늘었나=변화) ≠ '관심도'(얼마나 관심=척도)
-    {"all": ["관심"], "any": ["늘었", "증가", "예전보다"], "std_id": "친환경제품_관심증가"},
-    # 저탄소제품(마크) 인지 ≠ 탄소성적표지/환경성적표지 인지 (다른 마크)
-    {"all": ["저탄소제품"], "any": ["인지", "알고", "로고"], "std_id": "저탄소제품_인지도"},
-    {"all": ["탄소성적표지"], "any": ["인지", "알고", "인식"], "without": ["저탄소제품"],
-     "std_id": "환경성적표지_인지도"},
-]
+# 텍스트로 강제 교정한다. LLM 이 탄소성적표지를 저탄소제품/환경성적표지/탄소성적표지로
+# 제각각 매핑하고 인지도/인지경로/정의인지를 뒤섞어서, 주제+유형으로 결정한다.
 
 # override 로 새로 생기는 std_id 의 표시 라벨(시드 사전에 없는 것).
 STDID_OVERRIDE_LABELS: dict[str, str] = {
@@ -65,14 +57,21 @@ STDID_OVERRIDE_LABELS: dict[str, str] = {
 def _override_stdid(subsection: str, mapped: str) -> str:
     """ 문항 텍스트로 std_id 를 교정(과병합 분리). 매치 없으면 매핑값 그대로. """
     q = subsection or ""
-    for rule in STDID_OVERRIDES:
-        if any(k not in q for k in rule.get("all", [])):
-            continue
-        if rule.get("any") and not any(k in q for k in rule["any"]):
-            continue
-        if any(k in q for k in rule.get("without", [])):
-            continue
-        return rule["std_id"]
+    # ① '관심 증가'(전년 대비 변화) ≠ '관심도'(척도)
+    if "관심" in q and any(k in q for k in ("늘었", "증가", "예전보다")):
+        return "친환경제품_관심증가"
+    # ② 탄소성적표지·탄소발자국(=환경성적표지) vs 저탄소제품(마크) 인지 계열을
+    #    주제 + 유형(인지경로/정의인지/인지도)으로 분리. (LLM 이 뒤섞은 것 교정)
+    is_low = "저탄소제품" in q
+    is_epd = (("탄소성적표지" in q) or ("탄소발자국" in q)) and not is_low
+    if is_low or is_epd:
+        subj = "저탄소제품" if is_low else "환경성적표지"
+        if "경로" in q:
+            return f"{subj}_인지경로"
+        if any(k in q for k in ("제도 인지", "정의", "어떤 제도", "라고 생각")):
+            return f"{subj}_정의인지"
+        if any(k in q for k in ("인지", "알고", "로고")):
+            return f"{subj}_인지도"
     return mapped
 
 
