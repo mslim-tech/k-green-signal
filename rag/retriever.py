@@ -97,10 +97,12 @@ def _rerank(query: str, hits: list[Hit], top_k: int) -> list[Hit]:
 
 
 def search(query: str, k: int = 5, year: str | None = None,
-           fetch_k: int | None = None, rerank: bool = True) -> list[Hit]:
+           fetch_k: int | None = None, rerank: bool = True,
+           std_id: str | None = None) -> list[Hit]:
     """ 질문과 가까운 청크 top-k.
         rerank=True 면 벡터로 fetch_k 개를 넓게 뽑은 뒤 LLM 으로 재정렬해 상위 k 개를 돌려준다.
         (RAG_FAKE_LLM 이면 재정렬 생략 — 테스트 결정성). year 로 연도 필터 가능.
+        std_id 를 주면 그 표로만 좁혀 검색한다(질문→표 라우팅이 명확한 표를 지정할 때).
     """
     use_rerank = rerank and not os.getenv("RAG_FAKE_LLM")
     fetch_k = fetch_k or (max(k * 4, 12) if use_rerank else k)
@@ -108,7 +110,13 @@ def search(query: str, k: int = 5, year: str | None = None,
     client = get_client()
     qvec = embed_texts(client, [query])[0]
 
-    where = {"year": str(year)} if year else None
+    # 연도·표 필터를 Chroma where 로 묶는다(둘 다면 $and).
+    conds = []
+    if year:
+        conds.append({"year": str(year)})
+    if std_id:
+        conds.append({"std_id": std_id})
+    where = conds[0] if len(conds) == 1 else ({"$and": conds} if conds else None)
     col = get_collection()
     res = col.query(
         query_embeddings=[qvec],

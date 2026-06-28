@@ -25,10 +25,12 @@ try:
     from rag.extract import get_client
     from rag.config import ANSWER_MODEL
     from rag.retriever import search, Hit
+    from rag.routing import route
 except ImportError:
     from extract import get_client
     from config import ANSWER_MODEL
     from retriever import search, Hit
+    from routing import route
 
 
 SYSTEM_PROMPT = (
@@ -38,13 +40,13 @@ SYSTEM_PROMPT = (
     "'문서에서 찾을 수 없습니다'라고만 답한다. 절대 추측하거나 지어내지 마라.\n"
     "2. 수치·사실을 말할 때마다 바로 뒤에 출처를 [출처: 파일 p.쪽] 형식으로 붙인다.\n"
     "3. 연도가 여러 개면 연도를 구분해서 답한다.\n"
-    "4. 순위(1위·가장 많은·최다 등)를 물으면 '기타', '없음', '모름', '무응답', "
-    "'없음/모름/무응답', '소계', '합계', '전체' 같은 집계·비응답 항목은 **순위에서 절대 "
-    "1위·2위 등으로 제시하지 마라.** 이 항목이 가장 큰 값이어도 건너뛰고, 그 다음의 "
-    "'실제 응답 항목(품목/보기)'을 1위로 답한다. "
-    "(예: 보기 비율이 '기타 23.2%, 없음/모름/무응답 18.4%, 친환경적인 보일러 6.1%, "
-    "태양광 5.0% …' 이면, '기타'·'없음/모름/무응답'은 집계·비응답이라 제외하고 1위는 "
-    "'친환경적인 보일러 6.1%'다.) "
+    "4. 순위(1위·가장 많은·최다 등)를 물으면, 먼저 보기 목록에서 '기타', '없음', '모름', "
+    "'무응답', '없음/모름/무응답', '소계', '합계', '전체' 같은 **집계·기타·비응답 항목을 "
+    "모두 제외**하라. 그렇게 남은 '실제 응답 항목(품목/보기)' 중에서만 1·2·3위를 정한다. "
+    "**'기타'는 그 값이 아무리 커도 절대 1위가 될 수 없다.** "
+    "예1: '기타 23.2%, 없음/모름/무응답 18.4%, 보일러 6.1%, 태양광 5.0% …' → 1위는 '보일러 6.1%'. "
+    "예2: '유아·어린이 11.2%, 개인 위생용품 10.8%, … 기타 23.2%, 없음/모름/무응답 18.4%' → "
+    "1위는 '유아·어린이 용품 11.2%'('기타 23.2%'가 최대지만 집계라 제외). "
     "집계·비응답 항목의 비율은 답변 맨 끝에 '참고:' 로만 덧붙일 수 있다.\n"
     "5. [근거]에 비슷하지만 다른 표가 여러 개 있으면, 질문의 표현과 가장 정확히 일치하는 "
     "**표 하나만** 골라 답하고 다른 표의 수치를 섞지 마라. (예: '친환경제품 확대 희망'과 "
@@ -99,8 +101,14 @@ def answer(query: str, k: int = 5, year: str | None = None) -> Answer:
     if year is None:
         year = _detect_year(query)
 
+    # 질문이 명확히 한 표를 가리키면 그 표로 좁혀 검색한다(비슷한 표 간 LLM 변동 제거).
+    routed = route(query)
+
     t_ret = time.time()
-    hits = search(query, k=k, year=year)
+    hits = search(query, k=k, year=year, std_id=routed)
+    # 라우팅이 너무 좁혀 결과가 없으면(예: 그 연도엔 그 표가 없음) 표 필터 없이 재검색.
+    if routed and not hits:
+        hits = search(query, k=k, year=year)
     retrieval = round(time.time() - t_ret, 2)
 
     if not hits:
