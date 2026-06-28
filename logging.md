@@ -129,6 +129,19 @@
 - 결과(실측 각 3~5회 **결정적**): 친환경제품→보일러 6.1%, 환경표지→유아·어린이 11.2%, 2025환경표지→개인위생용품 55.2%. 모두 정확.
 - 테스트: `tests/test_routing.py`(결정적 9케이스) 통과. eval에 두 디스앰비규에이션 질문 복원(6문항). 기본 **22 passed, 2 deselected(slow)**, eval+slow 로컬 통과.
 
+## 2026-06-28
+
+### 인제스트 견고화 (B) — 새로고침 후 실행 복구 (사용자 요청, 계획 승인 후 구현)
+- **문제**: 인제스트 실행 상태(run_id/단계/타이밍)와 `ingest_proc`(Popen)가 `st.session_state`에만 존재 → 브라우저 새로고침/세션 유실 시 추적 상실. 서브프로세스는 고아로 계속 돌고 체인은 멈춤.
+- **해결(최소·외과적)**:
+  - `pipeline.py`: `save_state/load_state`(→ `outputs/ingest_state.json`, 원자적 교체, Popen 대신 **pid만** 저장), `pid_alive`(tasklist), `step_succeeded`(산출이 시작 이후 갱신됐는지로 성공 판정), `recover_step_result`(pid 생존+산출 → None/ok/fail 순수 판정), `cancel_pid`(복구 세션은 Popen 없어 pid로 종료).
+  - `app.py`: 각 전이(init·launch·skip·advance·error·cancel)마다 `save_state` + 단계 pid 기록. 앱 로드 시 `_ingest_recover()` — 저장 상태가 `running`이면 세션에 복구하고 **2단계로 이동**(모니터가 도는 화면) + "↻ …이어받았습니다" 안내. 모니터는 정상 세션=Popen(returncode), 복구 세션=`recover_step_result`로 전이. 취소도 복구 세션은 pid로 종료.
+- **검증**:
+  - `tests/test_pipeline_recovery.py`(신규, LLM·Streamlit 불필요·결정적 5케이스): save↔load 왕복, pid_alive, step_succeeded, recover_step_result(진행중/ok/fail).
+  - `tests/e2e/test_ingest.py`(+1 `test_ingest_recovers_after_refresh`): 강제 실행 중 `page.reload()` → "이어받았습니다" 노출 → pid 취소까지. **실제 서브프로세스**로 새로고침 복구를 증명(fake LLM).
+  - 실측: state.json 영속화 확인, 취소 후 잔여 python 프로세스 0(pid 취소 동작). 기본 **28 passed, 2 deselected(slow)**.
+- **한계(정직)**: returncode 영속화 대신 산출파일 신선도로 성공 판정(복구 경로 한정) — 부분 산출을 성공으로 볼 여지 있으나, 잘못된 데이터는 인덱싱 게이트가 차단. happy-path 에러 단계 복구는 유닛(`recover_step_result`='fail')로만 검증(실제 단계 실패 주입 E2E는 미작성).
+
 ### 알려진 데이터 이슈(요약)
 - 표 3-60: 추출 깨짐 → corrections로 39품목 정정(사람 확정).
 - 비전 후보 38건·미검수 high 33건·빈 값 다수 = **현재 인덱싱 차단 대상**(검수로 해소 필요).

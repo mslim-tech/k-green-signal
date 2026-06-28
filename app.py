@@ -576,9 +576,10 @@ def _ingest_init(pdf_name: str, force: bool = False) -> None:
         "pdf": pdf_name,
         "order": [s.key for s in pipeline.INGEST_STEPS],
         "idx": 0, "status": "running",
-        "started": {}, "ended": {}, "rc": {}, "skipped": [],
+        "started": {}, "ended": {}, "rc": {}, "skipped": [], "pid": {},
         "force": force,
     }
+    pipeline.save_state(st.session_state.ingest)
     _ingest_launch_current()
 
 
@@ -589,8 +590,24 @@ def _ingest_advance() -> None:
     if ing["idx"] >= len(ing["order"]):
         ing["status"] = "done"
         st.session_state.ingest_proc = None
+        pipeline.save_state(ing)
     else:
         _ingest_launch_current()
+
+
+def _ingest_recover() -> None:
+    """ 새로고침으로 세션이 날아간 뒤, 디스크의 인제스트 상태가 'running'이면 복구한다.
+        Popen 핸들은 못 살리므로, 복구 세션은 pid 생존/산출파일로 진행을 이어간다. """
+    if st.session_state.get("ingest"):
+        return                         # 세션에 이미 있으면(정상 진행 중) 복구 불필요
+    saved = pipeline.load_state()
+    if not saved or saved.get("status") != "running":
+        return
+    st.session_state.ingest = saved
+    st.session_state.ingest_proc = None    # 복구엔 Popen 없음 → pid 경로로 모니터
+    st.session_state.ingest_recovered = True
+    st.session_state.step = 2              # 진행 중 인제스트를 볼 수 있게 2단계로
+    log.info("인제스트 복구: run=%s idx=%s", saved.get("run_id"), saved.get("idx"))
 
 
 def _ingest_launch_current() -> None:
@@ -607,12 +624,15 @@ def _ingest_launch_current() -> None:
         ing["skipped"].append(key)
         st.session_state.ingest_proc = None
         log.info("인제스트 단계 스킵(최신): %s", key)
+        pipeline.save_state(ing)
         _ingest_advance()
         return
 
     proc = pipeline.launch(ing["run_id"], key, pdf_name=ing["pdf"] if key == "extract" else None)
     st.session_state.ingest_proc = proc
-    log.info("인제스트 단계 시작: %s (run=%s)", key, ing["run_id"])
+    ing.setdefault("pid", {})[key] = proc.pid    # 복구 시 pid 로 생존 확인
+    pipeline.save_state(ing)
+    log.info("인제스트 단계 시작: %s (run=%s pid=%s)", key, ing["run_id"], proc.pid)
 
 
 @st.fragment(run_every=2)
@@ -624,18 +644,33 @@ def _ingest_monitor() -> None:
     order, idx = ing["order"], ing["idx"]
     proc = st.session_state.get("ingest_proc")
 
-    # 진행 중인 단계가 끝났으면 상태 전이(다음 단계 launch 또는 완료/에러)
-    if ing["status"] == "running" and proc is not None and not pipeline.alive(proc):
+    # 진행 중인 단계가 끝났으면 상태 전이(다음 단계 launch 또는 완료/에러).
+    # 정상 세션은 Popen(returncode)으로, 복구 세션(Popen 없음)은 pid 생존+산출파일로 판정.
+    if ing["status"] == "running":
         key = order[idx]
-        ing["ended"][key] = time.time()
-        ing["rc"][key] = proc.returncode
-        log.info("인제스트 단계 종료: %s rc=%s", key, proc.returncode)
-        if proc.returncode != 0:
-            ing["status"] = "error"
+        if proc is not None:
+            finished = not pipeline.alive(proc)
+            rc = proc.returncode if finished else None
         else:
-            _ingest_advance()
+            # 복구 세션(Popen 없음): pid 생존+산출파일로 판정.
+            res = pipeline.recover_step_result(
+                pipeline.STEP_BY_KEY[key], ing["pdf"],
+                ing.get("pid", {}).get(key), ing["started"].get(key, 0))
+            finished = res is not None
+            rc = None if res is None else (0 if res == "ok" else 1)
+        if finished:
+            ing["ended"][key] = time.time()
+            ing["rc"][key] = rc
+            log.info("인제스트 단계 종료: %s rc=%s", key, rc)
+            if rc != 0:
+                ing["status"] = "error"
+                pipeline.save_state(ing)
+            else:
+                _ingest_advance()
 
     # 진행 표시
+    if st.session_state.get("ingest_recovered") and ing["status"] == "running":
+        st.info("↻ 새로고침 전 진행 중이던 인제스트를 이어받았습니다.")
     done = ing["idx"]
     total = len(order)
     frac = 1.0 if ing["status"] == "done" else min((done + 0.5) / total, 0.99)
@@ -694,8 +729,12 @@ def render_step_ingest(ctx: dict) -> None:
             proc = st.session_state.get("ingest_proc")
             if proc is not None:
                 pipeline.cancel(proc)
+            elif ing:    # 복구 세션: Popen 없음 → 현재 단계 pid 로 종료
+                key = ing["order"][ing["idx"]]
+                pipeline.cancel_pid(ing.get("pid", {}).get(key))
             if ing:
                 ing["status"] = "cancelled"
+                pipeline.save_state(ing)
             log.info("인제스트 취소")
             st.rerun()
 
@@ -755,6 +794,7 @@ def main():
     logfile = setup_logging("app")
     st.session_state.setdefault("logfile", str(logfile))
     st.session_state.setdefault("step", 1)
+    _ingest_recover()    # 새로고침으로 세션이 날아갔어도 진행 중 인제스트를 이어받는다.
 
     st.set_page_config(page_title="k-green-signal", layout="wide")
     st.title("🚦 대한민국 친환경 소비 인지도 실시간 신호등")

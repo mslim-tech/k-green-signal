@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -38,6 +39,7 @@ log = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 RUNS_DIR = OUTPUT_DIR / "runs"
+STATE_FILE = OUTPUT_DIR / "ingest_state.json"   # 현재/마지막 인제스트 실행 1건(영속화)
 
 
 @dataclass
@@ -155,11 +157,21 @@ def alive(proc: subprocess.Popen) -> bool:
     return proc.poll() is None
 
 
+def cancel_pid(pid: int | None) -> None:
+    """ pid 로 프로세스 트리째 종료(복구 세션엔 Popen 이 없어 pid 로 죽인다). """
+    if not pid:
+        return
+    try:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                       capture_output=True)
+    except Exception:
+        pass
+
+
 def cancel(proc: subprocess.Popen) -> None:
     """ 프로세스 트리째 종료(Windows: taskkill /T). """
     try:
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                       capture_output=True)
+        cancel_pid(proc.pid)
     except Exception:
         try:
             proc.kill()
@@ -176,6 +188,61 @@ def tail(path: Path, n: int = 50) -> str:
     except Exception:
         return ""
     return "\n".join(lines[-n:])
+
+
+# --- 상태 영속화 + 복구 -------------------------------------------------------
+# 인제스트 실행 상태(run_id/단계/타이밍/현재 단계 pid)를 디스크에 적어두면,
+# 브라우저 새로고침으로 Streamlit 세션이 날아가도 앱이 다시 읽어 진행을 이어간다.
+# (Popen 객체는 저장 못 하므로 pid 만 저장 → 복구 시 pid 생존·산출파일로 판정한다.)
+
+def save_state(state: dict) -> None:
+    """ 인제스트 실행 상태를 outputs/ingest_state.json 에 기록(원자적 교체). """
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(STATE_FILE)
+
+
+def load_state() -> dict | None:
+    """ 저장된 인제스트 실행 상태(없으면 None). """
+    if not STATE_FILE.exists():
+        return None
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def pid_alive(pid: int | None) -> bool:
+    """ 해당 pid 프로세스가 살아있는가(Popen 없이 복구 후 확인용, Windows: tasklist). """
+    if not pid:
+        return False
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+            capture_output=True, text=True,
+        )
+        return str(pid) in out.stdout
+    except Exception:
+        return False
+
+
+def step_succeeded(step: Step, pdf_name: str | None, started_ts: float) -> bool:
+    """ 복구 시 returncode 가 없으니, 단계 산출 파일이 시작 이후 갱신됐으면 성공으로 본다. """
+    out = step_output(step, pdf_name)
+    if not out.exists():
+        return False
+    # 시작 시각보다 약간 이른 갱신도 허용(파일시스템 mtime 해상도 여유 1s).
+    return out.stat().st_mtime >= started_ts - 1
+
+
+def recover_step_result(step: Step, pdf_name: str | None,
+                        pid: int | None, started_ts: float) -> str | None:
+    """ 복구 세션(Popen 없음)에서 단계의 끝남/성공 여부를 판정한다.
+        반환: None(아직 진행 중) · 'ok'(끝남+성공) · 'fail'(끝남+실패). """
+    if pid_alive(pid):
+        return None
+    return "ok" if step_succeeded(step, pdf_name, started_ts) else "fail"
 
 
 def main() -> None:

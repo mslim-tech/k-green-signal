@@ -35,3 +35,19 @@ def test_ingest_force_run_then_cancel(page: Page, base_url: str):
     expect(page.get_by_text(re.compile("인제스트:"))).to_be_visible(timeout=15000)
     page.get_by_role("button", name=re.compile("취소")).click()
     expect(page.get_by_text(re.compile("취소되었습니다"))).to_be_visible(timeout=15000)
+
+
+def test_ingest_recovers_after_refresh(page: Page, base_url: str):
+    """ 강제 실행 중 새로고침으로 세션이 날아가도, 디스크 상태로 진행을 이어받는다.
+        (인제스트 견고화: outputs/ingest_state.json 영속화 + pid 복구) """
+    _goto_ingest(page)
+    page.get_by_text(re.compile(r"강제 재실행")).click()      # 스킵 끄기(실제 단계가 떠야 복구 대상)
+    page.get_by_role("button", name=re.compile("전체 실행")).click()
+    expect(page.get_by_text(re.compile("인제스트:"))).to_be_visible(timeout=15000)
+
+    page.reload()    # ← 세션 유실 시뮬레이션. 복구되어 2단계로 이동·진행 표시여야 함.
+    expect(page.get_by_text(re.compile("이어받았습니다"))).to_be_visible(timeout=20000)
+
+    # 정리: 복구 세션에서 pid 로 취소(고아 프로세스 정리).
+    page.get_by_role("button", name=re.compile("취소")).click()
+    expect(page.get_by_text(re.compile("취소되었습니다"))).to_be_visible(timeout=15000)
