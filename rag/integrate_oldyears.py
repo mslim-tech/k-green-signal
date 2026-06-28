@@ -134,6 +134,39 @@ def _append_rows(path: Path, rows: list[dict], columns: list[str]) -> None:
             w.writerow({c: r.get(c, "") for c in columns})
 
 
+def _dedup_in_place(path: Path, columns: list[str]) -> int:
+    """ (year, std_id, std_response_label) 중복 행을 제거(값 있는 행 우선, 먼저 것 유지).
+        2015~2022는 보고서가 2종이라 같은 설문 문항이 두 번 들어옴 → 한 해로 통합.
+        반환: 제거된 행 수. 값이 서로 다른 충돌은 경고로 남긴다. """
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    seen: dict[tuple, dict] = {}
+    order: list[tuple] = []
+    removed = 0
+    for r in rows:
+        key = (r.get("year"), r.get("std_id"),
+               (r.get("std_response_label") or r.get("response_label") or "").strip())
+        if key not in seen:
+            seen[key] = r
+            order.append(key)
+            continue
+        removed += 1
+        prev = seen[key]
+        pv = (prev.get("value") or "").strip()
+        cv = (r.get("value") or "").strip()
+        if not pv and cv:                 # 먼저 것이 빈값이면 값 있는 것으로 교체
+            seen[key] = r
+        elif pv and cv and pv != cv:      # 둘 다 값 있는데 다르면 충돌(같은 설문이면 동일해야)
+            print(f"  ⚠️ 값 충돌 {key}: {pv} vs {cv} (먼저 값 유지)")
+    if removed:
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=columns)
+            w.writeheader()
+            for key in order:
+                w.writerow({c: seen[key].get(c, "") for c in columns})
+    return removed
+
+
 def main() -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -168,7 +201,11 @@ def main() -> None:
     rows = build_rows(records, qmap, dictionary)
     _append_rows(CLEAN, rows, CLEAN_COLUMNS)
     _append_rows(DEDUP, rows, CLEAN_COLUMNS)
-    print(f"\n✅ clean.csv·dedup.csv 에 2022 행 {len(rows)}개 추가 (기존 행 보존)")
+    print(f"\n✅ clean.csv·dedup.csv 에 행 {len(rows)}개 추가 (기존 행 보존)")
+    # 두 보고서(친환경제품+탄소/그린카드)가 겹치는 문항을 한 해로 통합(중복 제거).
+    rc = _dedup_in_place(CLEAN, CLEAN_COLUMNS)
+    rd = _dedup_in_place(DEDUP, CLEAN_COLUMNS)
+    print(f"♻️ 중복 통합: clean -{rc} · dedup -{rd} 행 ((year,std_id,라벨) 기준)")
 
 
 if __name__ == "__main__":

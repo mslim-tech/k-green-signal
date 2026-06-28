@@ -33,11 +33,11 @@ import fitz  # PyMuPDF
 try:
     from rag.extract import get_client
     from rag.config import VISION_MODEL
-    from rag.extract_vision import render_page_images, _resolve_pdf
+    from rag.extract_vision import render_page_images, _resolve_pdf, extract_pages_vision
 except ImportError:
     from extract import get_client
     from config import VISION_MODEL
-    from extract_vision import render_page_images, _resolve_pdf
+    from extract_vision import render_page_images, _resolve_pdf, extract_pages_vision
 
 
 try:
@@ -230,6 +230,81 @@ def run(source: str, save: bool = False) -> list[dict]:
     return all_records
 
 
+# --- 2014~2017 계열: 연도행이 없고 '응답자 특성별 교차분석'의 '전체' 행만 있는 형식 ---
+# 각 문항: 차트 페이지(제목+서술) → 교차분석 표(전체/성별/연령). 표의 '전체' 행이 그 해
+# 전체값. 차트+표를 함께 비전에 줘 제목과 완전한 전체 분포를 읽는다(연도는 파일명).
+import re as _re
+
+RE_CROSSTAB = _re.compile(r"응답자\s*특성[에별].*교차분석")
+
+
+def _year_from_name(name: str) -> int | None:
+    m = _re.search(r"(20\d{2})", name)
+    return int(m.group(1)) if m else None
+
+
+RE_Q = _re.compile(r"Q\s*[.．]")
+
+
+def find_crosstab_pages(pdf_path: Path) -> list[int]:
+    """ '응답자 특성별 교차분석' 표 페이지(1-based) 중, 직전 페이지가 'Q.' 차트인 것만.
+        → 문항당 주(1차) 표 하나만 잡아 제목·값을 정확히(복수응답 보조표는 직전이
+        1순위 표라 값이 섞이므로 제외). """
+    doc = fitz.open(pdf_path)
+    out = []
+    for i in range(doc.page_count):
+        if RE_CROSSTAB.search(doc[i].get_text("text")):
+            prev = doc[i - 1].get_text("text") if i >= 1 else ""
+            if RE_Q.search(prev):          # 직전이 차트(Q.)인 표만
+                out.append(i + 1)
+    doc.close()
+    return out
+
+
+def run_totalrow(source: str, save: bool = False, limit: int | None = None) -> list[dict]:
+    """ 2014~2017 형식: 교차분석 표의 '전체' 행을 비전으로 읽어 그 해 레코드를 만든다.
+        차트(직전 페이지)+표를 함께 줘 문항 제목과 전체 분포를 얻는다. """
+    pdf_path = _resolve_pdf(source)
+    year = _year_from_name(pdf_path.name)
+    client = get_client()
+    pages = find_crosstab_pages(pdf_path)
+    if limit:
+        pages = pages[:limit]
+    print(f"📄 {pdf_path.name} | 교차분석(전체행) 페이지 {len(pages)}개 | year={year}")
+    records: list[dict] = []
+    for n, pageno in enumerate(pages, 1):
+        ps = max(1, pageno - 1)   # 차트(제목)+표 함께
+        d = extract_pages_vision(
+            client, source, ps, pageno,
+            context="이 문항의 제목과, '응답자 특성별 교차분석' 표의 '전체' 행 응답 분포를 "
+                    "읽어라. 성별/연령/지역/직업 등 하위집단 행은 제외.")
+        items = _clean_items(d.get("response_items", []))
+        summary = (d.get("question_summary") or "").strip()
+        if not items or year is None:
+            print(f"  [{n}/{len(pages)}] p.{pageno} → (값 없음/스킵)")
+            continue
+        records.append({
+            "source": pdf_path.name, "year": year,
+            "page_start": pageno, "page_end": pageno,
+            "section": None, "subsection": summary,
+            "question_summary": summary, "response_items": items,
+            "base_n": d.get("base_n"), "unit": d.get("unit"),
+            "multi_response": bool(d.get("multi_response")),
+            "prev_year_note": None, "figures": [],
+            "extraction_confidence": d.get("extraction_confidence") or "high",
+            "warning": d.get("warning"),
+        })
+        print(f"  [{n}/{len(pages)}] p.{pageno} {summary[:34]} → {len(items)}보기")
+    if save:
+        out = OUTPUT_DIR / f"{pdf_path.stem}.extracted.jsonl"
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            for r in records:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"💾 저장: {out} ({len(records)}개 레코드)")
+    return records
+
+
 def main() -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -237,11 +312,12 @@ def main() -> None:
         pass
     args = sys.argv[1:]
     save = "--save" in args
-    args = [a for a in args if a != "--save"]
+    totalrow = "--totalrow" in args        # 2014~2017 형식(전체 행)
+    args = [a for a in args if a not in ("--save", "--totalrow")]
     if not args:
-        print('사용법: uv run python rag/extract_vision_oldtable.py "<파일명.pdf>" [--save]')
+        print('사용법: uv run python rag/extract_vision_oldtable.py "<파일명.pdf>" [--save] [--totalrow]')
         return
-    run(args[0], save=save)
+    (run_totalrow if totalrow else run)(args[0], save=save)
 
 
 if __name__ == "__main__":
