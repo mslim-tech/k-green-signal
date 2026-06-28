@@ -720,7 +720,8 @@ def render_step_ingest(ctx: dict) -> None:
         st.warning("먼저 1단계에서 PDF를 업로드하세요.")
         return
 
-    sel = st.selectbox("추출할 PDF", [p.name for p in pdfs])
+    # 최신 연도 PDF를 기본값으로(파일명이 연도로 시작 → 내림차순). 가장 흔히 처리할 보고서.
+    sel = st.selectbox("추출할 PDF", [p.name for p in sorted(pdfs, key=lambda p: p.name, reverse=True)])
     force = st.checkbox("강제 재실행(스킵 안 함)", value=False,
                         help="끄면 산출이 최신인 단계는 건너뜁니다(빠름). 켜면 전부 다시 실행합니다.")
     ing = st.session_state.get("ingest")
