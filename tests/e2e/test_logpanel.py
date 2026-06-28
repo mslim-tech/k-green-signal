@@ -14,7 +14,7 @@ from playwright.sync_api import Page, expect
 
 def test_log_panel_shows_real_app_log(page: Page, base_url: str):
     page.goto("/")
-    expect(page.get_by_text(re.compile("신호등"))).to_be_visible(timeout=30000)
+    expect(page.get_by_text(re.compile("실시간 신호등"))).to_be_visible(timeout=30000)
 
     # 사이드바 하단의 🩺 시스템 로그 expander 를 펼친다.
     panel = page.get_by_text(re.compile(r"🩺 시스템 로그"))

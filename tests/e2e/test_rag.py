@@ -11,7 +11,7 @@ from playwright.sync_api import Page, expect
 
 def test_rag_answer_has_citation_and_timing(page: Page, base_url: str):
     page.goto("/")
-    expect(page.get_by_text(re.compile("신호등"))).to_be_visible(timeout=30000)
+    expect(page.get_by_text(re.compile("실시간 신호등"))).to_be_visible(timeout=30000)
 
     # 5단계(질의)로 이동 — 인덱스가 있어 입장 가능
     page.get_by_role("button", name=re.compile(r"5\. 💬 질의")).click()

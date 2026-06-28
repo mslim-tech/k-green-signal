@@ -35,6 +35,9 @@ from rag.logging_setup import setup_logging
 # 인제스트 단계를 서브프로세스로 돌리는 러너(긴 LLM 단계가 UI 를 막지 않게).
 from rag import pipeline
 
+# 실시간 신호등(6단계): 정형 데이터의 연도별 추세 신호 계산.
+from rag import chunking, signals
+
 log = logging.getLogger("app")
 
 # 4단계가 만든 검수 큐 파일 위치
@@ -368,6 +371,7 @@ STEPS = [
     (3, "🔍 검수", "review"),
     (4, "📚 인덱싱", "index"),
     (5, "💬 질의(Q&A)", "qa"),
+    (6, "🚦 신호등", "signal"),
 ]
 # 임베딩/추출/답변에 API Key 가 필요한 단계
 STEPS_NEED_KEY = {2, 4, 5}
@@ -379,6 +383,7 @@ STEP_TODO = {
     3: "🔴 값 없는 행부터 골라 원문을 보고 값을 확정(저장)하세요.",
     4: "준비 게이트를 통과하면 '인덱싱 실행'을 누르세요.",
     5: "데이터에 대해 질문을 입력하세요. (출처 인용 답변)",
+    6: "연도별 추세 신호등을 살펴보세요. 색은 추세 방향(상승/보합/하락)입니다.",
 }
 
 
@@ -440,6 +445,8 @@ def can_enter(step_no: int, ctx: dict) -> bool:
         return ctx["review_queue"]           # 인제스트 산출(검수 큐)이 있어야
     if step_no == 5:
         return ctx["index_count"] > 0        # 인덱스가 있어야 질의
+    if step_no == 6:
+        return ctx["review_queue"]           # 정형 데이터(검수 큐 산출)가 있으면 추세 표시
     return False
 
 
@@ -786,6 +793,87 @@ def render_step_index(ctx: dict, gate=None) -> None:
     st.write(f"현재 인덱스 청크: {ctx['index_count']}")
 
 
+def render_step_signal(ctx: dict) -> None:
+    """ 6단계 · 실시간 신호등. 정형 데이터의 응답 항목을 연도별로 이어 추세 신호로 표시. """
+    import pandas as pd
+
+    st.subheader("🚦 6단계 · 실시간 신호등 (연도별 추세)")
+    st.caption(
+        "정형 데이터의 응답 항목을 연도별로 이어 추세를 신호로 보여줍니다. "
+        "색은 **추세 방향**입니다 — 🟢 상승 · 🟡 보합 · 🔴 하락 "
+        "(좋음/나쁨 같은 가치판단이 아닙니다). 데이터에 실제 있는 값·출처만 씁니다."
+    )
+
+    try:
+        rows = chunking.load_rows()
+    except Exception as error:
+        st.warning(f"먼저 인제스트(2단계)로 정형 데이터를 만들어 주세요. ({error})")
+        return
+
+    threshold = st.slider("신호 임계값 (이 %p 이상 변하면 상승/하락)",
+                          1.0, 10.0, signals.DEFAULT_THRESHOLD_PP, 0.5)
+    inds = signals.compute_signals(rows, threshold_pp=threshold)
+    if not inds:
+        st.info("2개년 이상 연결된 추세 데이터가 아직 없습니다. "
+                "(여러 연도의 PDF를 인제스트하면 추세가 생깁니다.)")
+        return
+
+    counts = signals.summarize(inds, threshold)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🟢 상승", counts["up"])
+    c2.metric("🟡 보합", counts["flat"])
+    c3.metric("🔴 하락", counts["down"])
+
+    # 가장 큰 변화(최근 두 연도) — 신호 있는 시계열만, |Δ| 큰 순 8개 카드.
+    st.markdown("#### 가장 큰 변화 (최근 두 연도)")
+    movers = [(ind, s) for ind in inds for s in ind.series if s.signal(threshold)]
+    movers.sort(key=lambda t: abs(t[1].delta), reverse=True)
+    cols = st.columns(4)
+    for i, (ind, s) in enumerate(movers[:8]):
+        sig = s.signal(threshold)
+        with cols[i % 4]:
+            st.metric(
+                label=f"{signals.SIGNAL_EMOJI[sig]} {ind.label} · {s.label}",
+                value=f"{s.latest.value}{s.unit}",
+                delta=f"{s.delta:+}%p",
+                delta_color="normal" if sig in ("up", "down") else "off",
+            )
+            st.caption(f"[출처: {s.source} p.{s.page}]")
+
+    st.divider()
+    # 카테고리별 추세 — 선택한 카테고리에서 변화 큰 지표 위주로 차트.
+    st.markdown("#### 카테고리별 추세")
+    cats = signals.categories(inds)
+    cat = st.selectbox("카테고리", cats)
+    in_cat = [i for i in inds if i.category == cat]   # compute_signals 가 |Δ| 큰 순으로 정렬됨
+    LIMIT = 10
+    for ind in in_cat[:LIMIT]:
+        with st.container(border=True):
+            st.markdown(f"**{ind.label}**")
+            if ind.summary:
+                st.caption(ind.summary)
+            top_series = ind.series[:6]   # 라벨이 많으면 변화 큰 6개만 차트에
+            years = sorted({p.year for s in top_series for p in s.points})
+            data = {s.label: [dict((p.year, p.value) for p in s.points).get(y) for y in years]
+                    for s in top_series}
+            st.line_chart(pd.DataFrame(data, index=[str(y) for y in years]))
+            for s in top_series:
+                sig = s.signal(threshold)
+                em = signals.SIGNAL_EMOJI.get(sig, "·")
+                if sig:
+                    tail = f" ({s.delta:+}%p {signals.SIGNAL_TEXT[sig]})"
+                elif s.delta is not None:
+                    tail = f" (Δ{s.delta:+}, 비% 단위)"
+                else:
+                    tail = ""
+                st.write(f"{em} {s.label}: {s.latest.value}{s.unit}{tail}")
+            head = top_series[0]
+            st.caption(f"[출처: {head.source} p.{head.page}]")
+    if len(in_cat) > LIMIT:
+        st.caption(f"… 외 {len(in_cat) - LIMIT}개 지표는 변화가 작아 생략했습니다 "
+                   f"(임계값을 낮추거나 다른 카테고리에서 확인하세요).")
+
+
 # -----------------------------------------------------------------------------
 # 6) 진입점: 가이드 스텝퍼
 # -----------------------------------------------------------------------------
@@ -836,6 +924,8 @@ def main():
         render_step_index(ctx, gate)
     elif step == 5:
         render_rag_tab(gate)
+    elif step == 6:
+        render_step_signal(ctx)
 
     # D2: 다음 단계로 가는 행동 안내(앞 단계 산출물이 준비됐으면 버튼, 아니면 잠금 안내)
     render_next_step_nav(ctx, step)

@@ -11,7 +11,7 @@ from playwright.sync_api import Page, expect
 
 def _goto(page: Page):
     page.goto("/")
-    expect(page.get_by_text(re.compile("신호등"))).to_be_visible(timeout=30000)
+    expect(page.get_by_text(re.compile("실시간 신호등"))).to_be_visible(timeout=30000)
 
 
 def test_stepper_shows_five_steps(page: Page, base_url: str):
