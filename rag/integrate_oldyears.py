@@ -41,7 +41,39 @@ except ImportError:
 STAGING = OUTPUT_DIR / "_staging_oldyears"
 CLEAN = OUTPUT_DIR / "standardized_long.clean.csv"
 DEDUP = OUTPUT_DIR / "standardized_long.dedup.csv"
+MAP_FILE = STAGING / "std_mapping.json"     # 결정적 매핑(저장/재사용)
 CLEAN_COLUMNS = LONG_CSV_COLUMNS[:5] + ["std_response_label"] + LONG_CSV_COLUMNS[5:]
+
+# 매핑 정제: LLM 이 '다른 문항'을 같은 std_id 로 과병합하는 것을 문항(subsection)
+# 키워드로 강제 교정한다. 위에서부터 첫 매치를 쓴다. (충돌·과병합 해소)
+#   all: 모두 포함 / any: 하나 이상 / without: 하나라도 있으면 제외
+STDID_OVERRIDES: list[dict] = [
+    # '관심 증가'(전년 대비 늘었나=변화) ≠ '관심도'(얼마나 관심=척도)
+    {"all": ["관심"], "any": ["늘었", "증가", "예전보다"], "std_id": "친환경제품_관심증가"},
+    # 저탄소제품(마크) 인지 ≠ 탄소성적표지/환경성적표지 인지 (다른 마크)
+    {"all": ["저탄소제품"], "any": ["인지", "알고", "로고"], "std_id": "저탄소제품_인지도"},
+    {"all": ["탄소성적표지"], "any": ["인지", "알고", "인식"], "without": ["저탄소제품"],
+     "std_id": "환경성적표지_인지도"},
+]
+
+# override 로 새로 생기는 std_id 의 표시 라벨(시드 사전에 없는 것).
+STDID_OVERRIDE_LABELS: dict[str, str] = {
+    "친환경제품_관심증가": "친환경제품 관심 증가(전년 대비)",
+}
+
+
+def _override_stdid(subsection: str, mapped: str) -> str:
+    """ 문항 텍스트로 std_id 를 교정(과병합 분리). 매치 없으면 매핑값 그대로. """
+    q = subsection or ""
+    for rule in STDID_OVERRIDES:
+        if any(k not in q for k in rule.get("all", [])):
+            continue
+        if rule.get("any") and not any(k in q for k in rule["any"]):
+            continue
+        if any(k in q for k in rule.get("without", [])):
+            continue
+        return rule["std_id"]
+    return mapped
 
 
 def load_curated_dict() -> dict[str, dict]:
@@ -107,9 +139,11 @@ def build_rows(records: list[dict], qmap: dict[tuple, str],
     rows: list[dict] = []
     for r in records:
         sid = qmap.get((r.get("source"), r.get("subsection")), "")
+        sid = _override_stdid(r.get("subsection") or "", sid)   # 과병합 교정
         entry = dictionary.get(sid, {})
+        std_label = entry.get("std_label") or STDID_OVERRIDE_LABELS.get(sid, sid)
         base = {
-            "std_id": sid, "std_label": entry.get("std_label", ""),
+            "std_id": sid, "std_label": std_label,
             "category": entry.get("category", ""), "year": r.get("year"),
             "unit": r.get("unit"), "base_n": r.get("base_n"),
             "multi_response": r.get("multi_response"),
@@ -179,8 +213,19 @@ def main() -> None:
     questions = distinct_questions(records)
     print(f"시드 std_id {len(seed)}개 | 스테이징 레코드 {len(records)} | 고유 문항 {len(questions)}")
 
-    client = get_client()
-    qmap, dictionary = map_to_stdids(client, questions, seed)
+    # 결정적 매핑: 저장된 매핑이 있으면 재사용(LLM 재호출·비결정성 제거).
+    if MAP_FILE.exists():
+        saved = json.loads(MAP_FILE.read_text(encoding="utf-8"))
+        qmap = {tuple(k.split("\t")): v for k, v in saved["qmap"].items()}
+        dictionary = saved["dictionary"]
+        print(f"♻️ 저장된 매핑 재사용: {MAP_FILE.name} ({len(qmap)}문항)")
+    else:
+        client = get_client()
+        qmap, dictionary = map_to_stdids(client, questions, seed)
+        MAP_FILE.write_text(json.dumps(
+            {"qmap": {f"{k[0]}\t{k[1]}": v for k, v in qmap.items()},
+             "dictionary": dictionary}, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"💾 매핑 저장: {MAP_FILE.name} ({len(qmap)}문항)")
 
     existing = sum(1 for v in qmap.values() if v in seed)
     new = sorted({v for v in qmap.values() if v not in seed})
