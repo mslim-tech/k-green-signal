@@ -112,9 +112,22 @@ def _page_str(row: dict) -> str:
     return str(lo) if lo == hi else f"{lo}-{hi}"
 
 
+def dataset_years(rows: list[dict]) -> list[int]:
+    """ 데이터에 값이 있는 연도들(오름차순). '연속 추적' 기준(모든 연도 커버) 계산용. """
+    ys = set()
+    for r in rows:
+        y = _parse_year(r.get("year"))
+        if y is not None and _parse_value(r.get("value")) is not None:
+            ys.add(y)
+    return sorted(ys)
+
+
 def compute_signals(rows: list[dict],
-                    threshold_pp: float = DEFAULT_THRESHOLD_PP) -> list[Indicator]:
-    """ 사실 행들 → 문항별 추세 지표 목록. 변화 큰(|Δ|) 순으로 정렬해 돌려준다. """
+                    threshold_pp: float = DEFAULT_THRESHOLD_PP,
+                    min_coverage: int = 2) -> list[Indicator]:
+    """ 사실 행들 → 문항별 추세 지표 목록. 변화 큰(|Δ|) 순으로 정렬해 돌려준다.
+        min_coverage: 한 (문항,라벨) 시계열이 이 개수 이상의 연도 값을 가져야 포함한다.
+            2(기본)=추세 가능한 모두. len(dataset_years)=모든 연도에 값 있는 '연속 추적' 항목만. """
     # std_id → {메타, labels: {label: {year: (value, unit, source, page)}}}
     by_std: dict[str, dict] = {}
     for r in rows:
@@ -139,7 +152,7 @@ def compute_signals(rows: list[dict],
     for sid, d in by_std.items():
         series_list: list[Series] = []
         for label, yvals in d["labels"].items():
-            if len(yvals) < 2:               # 추세를 보려면 2개년 이상
+            if len(yvals) < max(2, min_coverage):   # 최소 커버리지(연속 추적 기준)
                 continue
             years = sorted(yvals)
             points = [Point(y, yvals[y][0]) for y in years]

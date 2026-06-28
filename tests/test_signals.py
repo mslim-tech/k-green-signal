@@ -78,6 +78,22 @@ def test_sorted_by_abs_delta():
     assert [i.std_id for i in inds] == ["big", "small"]   # 변화 큰 게 먼저
 
 
+def test_min_coverage_filters_to_continuous():
+    rows = [
+        # 3개년 모두(연속 추적 가능)
+        _row("full", 2023, "인지", 50.0), _row("full", 2024, "인지", 53.0),
+        _row("full", 2025, "인지", 56.0),
+        # 2개년만(불연속)
+        _row("partial", 2024, "x", 50.0), _row("partial", 2025, "x", 55.0),
+    ]
+    assert signals.dataset_years(rows) == [2023, 2024, 2025]
+    # 기본(2개년 이상): 둘 다
+    assert {i.std_id for i in signals.compute_signals(rows)} == {"full", "partial"}
+    # 연속 추적(3개년 모두): full 만
+    cont = signals.compute_signals(rows, min_coverage=3)
+    assert {i.std_id for i in cont} == {"full"}
+
+
 def test_summarize_and_categories():
     rows = [
         _row("a", 2024, "x", 50.0, category="인지"),
