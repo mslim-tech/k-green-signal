@@ -28,7 +28,10 @@ except ImportError:
     import chunking
 
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 CHROMA_DIR = OUTPUT_DIR / "chroma"
 COLLECTION = "kgs_facts"   # k-green-signal 정형 사실 청크
 EMBED_BATCH = 100          # 임베딩 호출당 청크 수

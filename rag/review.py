@@ -31,7 +31,10 @@ from collections import defaultdict
 from pathlib import Path
 
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 SOURCE_CSV = OUTPUT_DIR / "standardized_long.flagged.csv"   # 4.3 산출 (입력, 보존)
 QUEUE_CSV = OUTPUT_DIR / "review_queue.csv"                 # 4.4 산출
 

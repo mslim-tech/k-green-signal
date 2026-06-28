@@ -40,7 +40,10 @@ except ImportError:
     from extract_vision import render_page_images, _resolve_pdf
 
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 
 RE_TAB = re.compile(r"\[\s*표\s*\d+\s*[-–~]\s*\d+\s*\]\s*(.*)")   # [표 3-1] 제목
 RE_YEARROW = re.compile(r"\[\s*20\d{2}\s*년\s*\]")               # [2022년] 전체 연도행

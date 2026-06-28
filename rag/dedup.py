@@ -37,7 +37,10 @@ from collections import defaultdict
 from pathlib import Path
 
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 SOURCE_CSV = OUTPUT_DIR / "standardized_long.clean.csv"     # 4.1 산출 (입력, 보존)
 DEDUP_CSV = OUTPUT_DIR / "standardized_long.dedup.csv"      # 4.2 산출
 LOG_CSV = OUTPUT_DIR / "dedup_log.csv"

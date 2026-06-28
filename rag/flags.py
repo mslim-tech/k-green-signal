@@ -41,7 +41,10 @@ except ImportError:
     from config import STANDARDIZE_MODEL as MODEL_NAME
 
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 # 4.2 중복정리(dedup) 결과가 있으면 그걸, 없으면 4.1 결과(clean)를 입력으로 쓴다.
 _DEDUP = OUTPUT_DIR / "standardized_long.dedup.csv"           # 4.2 산출 (있으면 우선)
 _CLEAN = OUTPUT_DIR / "standardized_long.clean.csv"           # 4.1 산출

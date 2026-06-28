@@ -36,7 +36,10 @@ from datetime import datetime
 from pathlib import Path
 
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 CORRECTIONS_PATH = OUTPUT_DIR / "corrections.jsonl"
 
 # 한 행을 가리키는 식별 키를 이루는 컬럼들.

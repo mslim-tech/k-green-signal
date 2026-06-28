@@ -14,8 +14,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from datetime import datetime
@@ -70,6 +72,17 @@ def streamlit_server(server_log: Path):
     """ 세션 동안 헤드리스 streamlit 을 띄우고 종료까지 관리. base_url 을 돌려준다. """
     _free_port(PORT)
 
+    # 산출물 격리: 실제 outputs/ 를 임시 폴더로 복제하고 서버가 그쪽을 쓰게 한다.
+    #   → 인제스트 테스트가 파이프라인을 실제로 돌려 산출물을 재생성/덮어써도
+    #     실제 outputs/(옛 연도 통합 데이터 등)는 절대 손상되지 않는다.
+    iso_root = Path(tempfile.mkdtemp(prefix="kgs_e2e_outputs_"))
+    iso_outputs = iso_root / "outputs"
+    real_outputs = PROJECT_ROOT / "outputs"
+    if real_outputs.exists():
+        shutil.copytree(real_outputs, iso_outputs)
+    else:
+        iso_outputs.mkdir(parents=True)
+
     env = {
         **os.environ,
         "PYTHONIOENCODING": "utf-8",
@@ -77,6 +90,7 @@ def streamlit_server(server_log: Path):
         "PYTHONUTF8": "1",
         "RAG_FAKE_LLM": "1",          # E2E 는 LLM 호출 없이 결정적 스텁 사용
         "RAG_LOG_DIR": str(LOG_DIR),
+        "RAG_OUTPUT_DIR": str(iso_outputs),   # 산출물 격리(실제 outputs 보호)
     }
     cmd = [
         "uv", "run", "streamlit", "run", "app.py",
@@ -107,6 +121,7 @@ def streamlit_server(server_log: Path):
             logf.close()
         except Exception:
             pass
+        shutil.rmtree(iso_root, ignore_errors=True)   # 격리 산출물 임시폴더 정리
 
 
 @pytest.fixture(scope="session")

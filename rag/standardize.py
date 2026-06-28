@@ -38,7 +38,10 @@ except ImportError:
     from config import STANDARDIZE_MODEL as MODEL_NAME
 
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 BATCH_SIZE = 40  # 한 번의 LLM 호출에 넘기는 문항 수
 
 

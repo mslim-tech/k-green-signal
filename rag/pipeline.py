@@ -37,7 +37,10 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_DIR = PROJECT_ROOT / "outputs"
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 RUNS_DIR = OUTPUT_DIR / "runs"
 STATE_FILE = OUTPUT_DIR / "ingest_state.json"   # 현재/마지막 인제스트 실행 1건(영속화)
 

@@ -263,7 +263,10 @@ def format_record(rec: ExtractedRecord) -> str:
 
 def save_jsonl(records: list[ExtractedRecord], source_name: str) -> Path:
     """ 추출 결과를 outputs/ 에 JSONL 로 저장한다. (결과 파일이 필요해진 시점에 폴더 생성) """
-    out_dir = Path("outputs")
+    try:
+        from rag.paths import OUTPUT_DIR as out_dir
+    except ImportError:
+        from paths import OUTPUT_DIR as out_dir
     out_dir.mkdir(exist_ok=True)
     stem = Path(source_name).stem
     out_path = out_dir / f"{stem}.extracted.jsonl"

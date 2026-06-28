@@ -42,7 +42,10 @@ except ImportError:
     from config import STANDARDIZE_MODEL as MODEL_NAME
 
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 SOURCE_CSV = OUTPUT_DIR / "standardized_long.csv"        # 3단계 산출 (입력, 보존)
 MAP_PATH = OUTPUT_DIR / "response_label_map.json"        # 4.1.3 산출
 CLEAN_CSV = OUTPUT_DIR / "standardized_long.clean.csv"   # 4.1.4 산출

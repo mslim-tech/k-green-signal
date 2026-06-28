@@ -37,7 +37,10 @@ except Exception:
     _ENC = None
 
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 # dedup(4.2) 결과를 우선 입력으로 (없으면 clean). flagged 도 가능하지만 값은 동일.
 _DEDUP = OUTPUT_DIR / "standardized_long.dedup.csv"
 _CLEAN = OUTPUT_DIR / "standardized_long.clean.csv"

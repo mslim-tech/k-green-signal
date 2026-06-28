@@ -38,7 +38,10 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 REVIEW_QUEUE = OUTPUT_DIR / "review_queue.csv"
 VISION_CANDIDATES = OUTPUT_DIR / "vision_candidates.csv"
 

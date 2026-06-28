@@ -34,7 +34,10 @@ except ImportError:
     from standardize import (_batch_prompt, _call_standardize, Instance,
                             BATCH_SIZE, LONG_CSV_COLUMNS)
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 STAGING = OUTPUT_DIR / "_staging_oldyears"
 CLEAN = OUTPUT_DIR / "standardized_long.clean.csv"
 DEDUP = OUTPUT_DIR / "standardized_long.dedup.csv"

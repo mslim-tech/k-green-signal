@@ -195,6 +195,11 @@
 - 우려: 23~25 기준이 문항마다 다를 수 있음(녹색제품_인지도는 top2=잘+조금, 3째가 '들어본 적'). 그린카드/저탄소/녹색매장은 top3가 맞는가?
 - 검증(불확실성 없는 '비인지=전혀모른다' 범주의 경계 연속성): 옛 전혀모른다(2022) vs 최근 비인지(2023~25) — 그린카드 33.3 vs 22.9/37.4/31.1 · 저탄소 33.7 vs 22.3/36.2/33.7 · 녹색매장 44.3 vs 32.9/47.7/45.2 · 환경표지 12.1 vs 9.3/18.7/14.6. **모두 같은 수준**. top2였다면 최근 비인지가 '본 적은 있다'(~25~40%p)만큼 커야 하나 아님 → **최근 비인지=전혀모른다(단일점) → 인지=top3 확정.** 4개 모두 일관, 가짜 단절 없음 → **환산 유지(취소 불필요).**
 
+### e2e 테스트 격리 — 통합 데이터 보호 (다음 작업)
+- 문제: e2e 인제스트(force/recover)가 실제 파이프라인을 돌려 outputs/ CSV를 재생성→2022 통합/std_id를 덮어쓰고 신선도도 교란. 전체 e2e 실행이 위험했음.
+- 해결: 산출물 경로를 env로 제어. **`rag/paths.py`(신규)** `OUTPUT_DIR = Path(os.environ.get("RAG_OUTPUT_DIR","outputs"))`. 14개 모듈(chunking·corrections·dedup·flags·index·integrate_oldyears·refine·review·standardize·validate·extract·extract_vision_oldtable·refill_vision·pipeline)이 여기서 OUTPUT_DIR import(기본 동작 불변). `tests/e2e/conftest.py`가 세션 시작 시 outputs/를 임시폴더로 복제하고 `RAG_OUTPUT_DIR`로 서버를 그쪽에 묶음→종료 시 정리.
+- 결과: **전체 49 passed**(e2e 포함, 이전 비-e2e 35만 안전→이제 전체 안전). 실제 outputs/ e2e 후에도 dedup 2439행·2022 1588행·게이트 통과·인지도 8개년 그대로(보존 확인).
+
 ### 알려진 데이터 이슈(요약)
 - 표 3-60: 추출 깨짐 → corrections로 39품목 정정(사람 확정).
 - 비전 후보 38건·미검수 high 33건·빈 값 다수 = **현재 인덱싱 차단 대상**(검수로 해소 필요).

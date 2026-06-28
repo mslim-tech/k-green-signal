@@ -34,7 +34,10 @@ except ImportError:
     from extract import get_client
 
 
-OUTPUT_DIR = Path("outputs")
+try:
+    from rag.paths import OUTPUT_DIR
+except ImportError:
+    from paths import OUTPUT_DIR
 RAW_CSV = OUTPUT_DIR / "standardized_long.csv"          # 3단계 산출(원본 라벨)
 CLEAN_CSV = OUTPUT_DIR / "standardized_long.clean.csv"  # 4.1 산출(+std_response_label)
 LOG_CSV = OUTPUT_DIR / "vision_refill_log.csv"
