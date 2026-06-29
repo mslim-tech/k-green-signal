@@ -101,8 +101,13 @@ RESPONSE_LABEL_ALIASES: dict[str, dict[str, str]] = {
 #   도출 라벨은 각 문항의 23~25년 라벨과 똑같이 맞춰 시계열이 이어지게 한다.
 #   std_id → {"label": 23~25 기준 라벨, "components": 합칠 옛 보기들}
 _AWARE3 = ["잘 알고 있다", "조금 알고 있다", "본 적은 있다"]
+# 2017 은 환경마크 로고가 신/구로 리뉴얼되어 인지도를 '신마크/구마크' 형식으로 조사했다
+# (환경표지·환경성적표지 모두). 그 해의 '인지'는 어느 마크든 알아본 합(모두 인지+신마크만
+# +구마크만), 비인지는 '신/구마크 모두 비인지'. 척도(잘/조금/본적) 대신 이 보기로 도출한다.
+_AWARE_MARK = ["신마크/구마크 모두 인지", "신마크만 인지", "구마크만 인지"]
 DERIVE_AGGREGATES: dict[str, dict] = {
-    "환경표지_인지도": {"label": "인지", "components": _AWARE3},
+    "환경표지_인지도": {"label": "인지", "components": _AWARE3,
+                       "alt_components": [_AWARE_MARK]},
     "그린카드_인지도": {"label": "알고 있다", "components": _AWARE3},
     "저탄소제품_인지도": {"label": "알고 있음", "components": _AWARE3},
     "녹색매장_인지도": {"label": "인지", "components": _AWARE3},
@@ -133,9 +138,13 @@ def derive_aggregates(rows: list[dict]) -> list[dict]:
         cfg = DERIVE_AGGREGATES[sid]
         if cfg["label"] in labels:           # 이미 집계 있음(최근) → 도출 불필요
             continue
-        comps = [labels[c] for c in cfg["components"] if c in labels]
-        if len(comps) != len(cfg["components"]):   # 구성 보기가 다 있어야 도출
+        # 기본 보기집합이 다 없으면 대체 보기집합(예: 2017 신/구마크)을 차례로 시도
+        candidate_sets = [cfg["components"]] + cfg.get("alt_components", [])
+        comp_set = next((cs for cs in candidate_sets
+                         if all(c in labels for c in cs)), None)
+        if comp_set is None:                 # 어느 보기집합도 완전하지 않으면 도출 안 함
             continue
+        comps = [labels[c] for c in comp_set]
         total = round(sum(v for v, _ in comps), 1)
         sample = comps[0][1]
         nr = dict(sample)

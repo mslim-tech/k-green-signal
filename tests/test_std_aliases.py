@@ -76,6 +76,24 @@ def test_carbon_footprint_awareness_is_exempt():
     assert "탄소발자국" in out[0]["std_label"]
 
 
+def test_derive_aggregate_from_mark_renewal():
+    # 2017 환경표지 인지도는 로고 리뉴얼로 '신/구마크' 형식 → 척도 보기가 없다.
+    # 대체 보기집합(신/구마크)으로 '인지'(=알아본 합)를 도출해 시계열에 연결한다.
+    rows = [
+        {"std_id": "환경표지_인지도", "std_response_label": "신마크/구마크 모두 인지",
+         "year": "2017", "value": "61.7", "unit": "%"},
+        {"std_id": "환경표지_인지도", "std_response_label": "신마크만 인지",
+         "year": "2017", "value": "19.0", "unit": "%"},
+        {"std_id": "환경표지_인지도", "std_response_label": "구마크만 인지",
+         "year": "2017", "value": "1.9", "unit": "%"},
+        {"std_id": "환경표지_인지도", "std_response_label": "신마크/구마크 모두 비인지",
+         "year": "2017", "value": "17.4", "unit": "%"},
+    ]
+    out = std_aliases.derive_aggregates(rows)
+    인지 = [r for r in out if r["std_response_label"] == "인지" and r["year"] == "2017"]
+    assert len(인지) == 1 and 인지[0]["value"] == "82.6"   # 61.7+19.0+1.9
+
+
 def test_response_canon_connects_eras():
     rows = [
         {"std_id": "환경문제_관심도", "std_response_label": "[관심]",
