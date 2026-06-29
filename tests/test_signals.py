@@ -54,6 +54,20 @@ def test_non_percent_unit_has_no_signal():
     assert s.signal() is None      # %가 아니라 신호는 없음
 
 
+def test_gap_in_latest_two_points_has_no_signal():
+    # 최신 두 점이 인접 연도가 아니면(예: 2017→2023) 6년치를 한 스텝처럼 보는
+    # '가짜 점프'라 신호를 매기지 않는다(추세선/Δ 계산은 그대로).
+    rows = [_row("g", 2017, "x", 10.0), _row("g", 2023, "x", 80.0)]
+    s = signals.compute_signals(rows)[0].series[0]
+    assert s.delta == 70.0          # 변화는 계산되지만
+    assert s.is_yoy is False
+    assert s.signal() is None       # 인접 연도가 아니라 신호 없음
+    # 인접 연도면 정상 신호
+    adj = [_row("h", 2024, "x", 10.0), _row("h", 2025, "x", 80.0)]
+    sa = signals.compute_signals(adj)[0].series[0]
+    assert sa.is_yoy is True and sa.signal() == "up"
+
+
 def test_single_year_dropped():
     rows = [_row("one", 2025, "인지", 60.0)]   # 한 연도뿐 → 시계열 안 됨
     assert signals.compute_signals(rows) == []

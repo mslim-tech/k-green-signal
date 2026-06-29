@@ -812,26 +812,29 @@ def render_step_signal(ctx: dict) -> None:
         return
 
     ds_years = signals.dataset_years(rows)
-    n_years = len(ds_years)
 
     c_th, c_cov = st.columns([3, 2])
     with c_th:
         threshold = st.slider("신호 임계값 (이 %p 이상 변하면 상승/하락)",
                               1.0, 10.0, signals.DEFAULT_THRESHOLD_PP, 0.5)
     with c_cov:
-        continuous_only = st.checkbox(
-            f"연속 추적 항목만 ({n_years}개년 모두 값 있음)", value=(n_years >= 2),
-            help="끄면 2개년 이상 모든 항목을 봅니다. 켜면 모든 연도에 값이 있어 "
-                 "연도별로 끊김 없이 비교 가능한 항목만 봅니다(불연속 항목의 가짜 큰 변동 제거).")
-    min_cov = n_years if continuous_only else 2
+        recent_yoy_only = st.checkbox(
+            "최근 연속년(YoY) 항목만", value=False,
+            help="끄면 2개년 이상 모든 추세 항목을 봅니다(기본). 켜면 가장 최근 두 "
+                 "연도가 인접(전년대비 비교 가능)한 항목만 봅니다. 신호(🟢🟡🔴)는 "
+                 "어느 모드든 인접 연도일 때만 매겨, 끊긴 구간의 가짜 큰 변동은 신호로 잡지 않습니다.")
 
-    inds = signals.compute_signals(rows, threshold_pp=threshold, min_coverage=min_cov)
     all_inds = signals.compute_signals(rows, threshold_pp=threshold, min_coverage=2)
-    if continuous_only:
-        st.caption(f"📅 데이터 연도: {'·'.join(map(str, ds_years))} · "
-                   f"연속 추적 {len(inds)}문항 표시 (전체 추세가능 {len(all_inds)}문항 중).")
+    if recent_yoy_only:
+        inds = [i for i in all_inds if any(s.is_yoy for s in i.series)]
+    else:
+        inds = all_inds
+    st.caption(f"📅 데이터 연도: {'·'.join(map(str, ds_years))} · "
+               f"{len(inds)}문항 표시"
+               + (f" (전체 추세가능 {len(all_inds)}문항 중 최근 연속년만)"
+                  if recent_yoy_only else " (2개년 이상 전체 추세)"))
     if not inds:
-        st.info("표시할 추세 데이터가 없습니다. '연속 추적 항목만'을 끄거나 "
+        st.info("표시할 추세 데이터가 없습니다. '최근 연속년(YoY) 항목만'을 끄거나 "
                 "여러 연도의 PDF를 인제스트해 보세요.")
         return
 

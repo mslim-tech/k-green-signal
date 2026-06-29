@@ -58,9 +58,16 @@ class Series:
             return None
         return round(self.latest.value - self.prev.value, 1)
 
+    @property
+    def is_yoy(self) -> bool:
+        """ 최신 두 점이 '인접 연도'(간격 1)인가. 그래야 변화가 진짜 전년대비(YoY)다.
+            간격이 벌어지면(예: 2017→2023) 6년치를 한 스텝처럼 보여 '가짜 점프'가 된다. """
+        return self.prev is not None and (self.latest.year - self.prev.year) == 1
+
     def signal(self, threshold_pp: float = DEFAULT_THRESHOLD_PP) -> str | None:
-        """ 'up'/'flat'/'down' 또는 None(신호 없음: 비% 단위·점 1개). """
-        if self.unit != "%" or self.delta is None:
+        """ 'up'/'flat'/'down' 또는 None(신호 없음: 비% 단위·점 1개·최신 두 점이
+            인접 연도 아님). 인접 연도일 때만 진짜 YoY 로 보고 신호를 매긴다. """
+        if self.unit != "%" or self.delta is None or not self.is_yoy:
             return None
         if self.delta >= threshold_pp:
             return "up"
@@ -80,7 +87,8 @@ class Indicator:
 
     @property
     def max_abs_delta(self) -> float:
-        deltas = [abs(s.delta) for s in self.series if s.delta is not None]
+        # 인접 연도(진짜 YoY) 시계열만으로 정렬한다(가짜 점프가 위로 오지 않게).
+        deltas = [abs(s.delta) for s in self.series if s.delta is not None and s.is_yoy]
         return max(deltas) if deltas else 0.0
 
 
