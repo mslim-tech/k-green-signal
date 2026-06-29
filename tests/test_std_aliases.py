@@ -94,6 +94,23 @@ def test_derive_aggregate_from_mark_renewal():
     assert len(인지) == 1 and 인지[0]["value"] == "82.6"   # 61.7+19.0+1.9
 
 
+def test_derive_aggregate_epd_mark_renewal():
+    # 환경성적표지도 2017 신/구마크 형식 → 같은 방식으로 인지 도출(58.5).
+    rows = [
+        {"std_id": "환경성적표지_인지도", "std_response_label": "신마크/구마크 모두 인지",
+         "year": "2017", "value": "38.8", "unit": "%"},
+        {"std_id": "환경성적표지_인지도", "std_response_label": "신마크만 인지",
+         "year": "2017", "value": "18.6", "unit": "%"},
+        {"std_id": "환경성적표지_인지도", "std_response_label": "구마크만 인지",
+         "year": "2017", "value": "1.1", "unit": "%"},
+        {"std_id": "환경성적표지_인지도", "std_response_label": "신마크/구마크 모두 비인지",
+         "year": "2017", "value": "41.5", "unit": "%"},
+    ]
+    out = std_aliases.derive_aggregates(rows)
+    인지 = [r for r in out if r["std_response_label"] == "인지" and r["year"] == "2017"]
+    assert len(인지) == 1 and 인지[0]["value"] == "58.5"   # 38.8+18.6+1.1
+
+
 def test_response_canon_connects_eras():
     rows = [
         {"std_id": "환경문제_관심도", "std_response_label": "[관심]",
