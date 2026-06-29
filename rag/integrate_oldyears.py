@@ -42,6 +42,9 @@ STAGING = OUTPUT_DIR / "_staging_oldyears"
 CLEAN = OUTPUT_DIR / "standardized_long.clean.csv"
 DEDUP = OUTPUT_DIR / "standardized_long.dedup.csv"
 MAP_FILE = STAGING / "std_mapping.json"     # 결정적 매핑(저장/재사용)
+# 사람이 채운 과병합 교정 워크시트(저장소 루트). proposed_std_id 가 채워진 행만
+# (year, current_std_id, subsection 접두사) 로 std_id 를 결정적으로 교정한다.
+WORKSHEET = Path(__file__).resolve().parent.parent / "mapping_review.csv"
 CLEAN_COLUMNS = LONG_CSV_COLUMNS[:5] + ["std_response_label"] + LONG_CSV_COLUMNS[5:]
 
 # 매핑 정제: LLM 이 '다른 문항'을 같은 std_id 로 과병합하는 것을 문항(subsection)
@@ -73,6 +76,35 @@ def _override_stdid(subsection: str, mapped: str) -> str:
         if any(k in q for k in ("인지", "알고", "로고")):
             return f"{subj}_인지도"
     return mapped
+
+
+def load_worksheet_overrides() -> list[dict]:
+    """ mapping_review.csv 에서 proposed_std_id 가 채워진 행만 읽는다.
+        반환 항목: {year, current_std_id, prefix(잘린 subsection), proposed} """
+    if not WORKSHEET.exists():
+        return []
+    overrides: list[dict] = []
+    with open(WORKSHEET, encoding="utf-8-sig") as f:
+        for r in csv.DictReader(f):
+            proposed = (r.get("proposed_std_id(편집)") or "").strip()
+            sub = (r.get("subsection") or "").strip()
+            if proposed and sub:
+                overrides.append({"year": str(r.get("year") or "").strip(),
+                                  "current_std_id": (r.get("current_std_id") or "").strip(),
+                                  "prefix": sub, "proposed": proposed})
+    return overrides
+
+
+def _apply_worksheet(year, subsection: str, sid: str, overrides: list[dict]) -> str:
+    """ 워크시트 교정을 적용한다. (year, 현재 std_id, subsection 접두사) 가 맞으면
+        proposed std_id 로 바꾼다. 접두사가 여럿 맞으면 가장 긴 것을 택한다. """
+    best = None
+    for ov in overrides:
+        if (ov["year"] == str(year) and ov["current_std_id"] == sid
+                and (subsection or "").startswith(ov["prefix"])):
+            if best is None or len(ov["prefix"]) > len(best["prefix"]):
+                best = ov
+    return best["proposed"] if best else sid
 
 
 def load_curated_dict() -> dict[str, dict]:
@@ -135,10 +167,23 @@ def map_to_stdids(client, questions: list[dict], seed: dict[str, dict]):
 def build_rows(records: list[dict], qmap: dict[tuple, str],
                dictionary: dict[str, dict]) -> list[dict]:
     """ 2022 레코드 → clean.csv 형식 행들(응답 항목 펼침). std_response_label=정제 라벨. """
+    overrides = load_worksheet_overrides()
     rows: list[dict] = []
     for r in records:
         sid = qmap.get((r.get("source"), r.get("subsection")), "")
-        sid = _override_stdid(r.get("subsection") or "", sid)   # 과병합 교정
+        sid = _override_stdid(r.get("subsection") or "", sid)   # 과병합 교정(하드코딩)
+        base = dictionary.get(sid, {})                          # 교정 前 기존 항목
+        new_sid = _apply_worksheet(r.get("year"), r.get("subsection") or "",
+                                   sid, overrides)              # 워크시트 교정(사람확정)
+        if new_sid != sid and new_sid not in dictionary:        # 새 std_id 면 항목 합성
+            label = base.get("std_label") or new_sid
+            if new_sid.endswith("_복수응답") and label:
+                label = label + " (1+2+3순위 복수응답)"
+            elif label == base.get("std_label"):                # 같은 라벨이면 식별 위해 id 사용
+                label = new_sid
+            dictionary[new_sid] = {"std_id": new_sid, "std_label": label,
+                                   "category": base.get("category", "")}
+        sid = new_sid
         entry = dictionary.get(sid, {})
         std_label = entry.get("std_label") or STDID_OVERRIDE_LABELS.get(sid, sid)
         base = {
