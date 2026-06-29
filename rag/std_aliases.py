@@ -41,6 +41,12 @@ STD_ID_TERM_MAP: dict[str, str] = {
     "탄소발자국": "환경성적표지",
 }
 
+# 용어정규화 제외 std_id: 2017 보고서는 환경성적표지 로고(우산, p79)와 별개로
+# 탄소발자국(구 탄소성적표지) 마크 인지도(p86)를 따로 조사했다. 후자를 별도 계열로
+# 유지하려면(사용자 확정) 이 id 만 탄소발자국→환경성적표지 치환에서 제외한다.
+# (2017 A행 6개에만 영향. 다른 연도 탄소발자국 인지도는 이미 환경성적표지_인지도 로 매핑됨.)
+STD_ID_TERM_EXEMPT: set[str] = {"탄소발자국_인지도"}
+
 
 def _normalize_terms(text: str) -> str:
     for old, new in STD_ID_TERM_MAP.items():
@@ -148,9 +154,11 @@ def apply_aliases(rows: list[dict]) -> list[dict]:
     out: list[dict] = []
     for r in rows:
         sid = (r.get("std_id") or "").strip()
-        canon = _normalize_terms(STD_ID_ALIASES.get(sid, sid))   # 별칭 + 용어 정규화
+        exempt = sid in STD_ID_TERM_EXEMPT                       # 용어정규화 제외
+        raw = STD_ID_ALIASES.get(sid, sid)
+        canon = raw if exempt else _normalize_terms(raw)         # 별칭 + 용어 정규화
         label = (r.get("std_label") or "")
-        label_canon = STD_LABEL_CANON.get(canon, _normalize_terms(label))
+        label_canon = STD_LABEL_CANON.get(canon, label if exempt else _normalize_terms(label))
         lbl_map = RESPONSE_LABEL_ALIASES.get(canon)
         cur_resp = (r.get("std_response_label") or "").strip()
         resp_new = lbl_map.get(cur_resp) if lbl_map else None

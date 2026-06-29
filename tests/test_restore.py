@@ -25,14 +25,17 @@ CORRECTIONS = PROJECT_ROOT / "outputs" / "corrections.jsonl"
 def test_table_3_60_restored_from_corrections():
     from rag import corrections, chunking
 
-    # 1) 소스 CSV 에는 없어야 한다(추출 깨져 드롭된 표).
+    # 1) 소스 CSV 에는 없어야 한다(추출 깨져 드롭된 표). 복원은 (year, std_id) 단위라
+    #    2023 표 3-60 의 키만 부재하면 된다(옛 연도 통합으로 같은 std_id 의 2016/2017
+    #    '확대희망' 행은 소스에 있지만 2023 표 3-60 은 여전히 corrections 에만 있음).
     src_rows = []
     if chunking.SOURCE_CSV.exists():
         import csv
         with open(chunking.SOURCE_CSV, encoding="utf-8-sig", newline="") as f:
             src_rows = list(csv.DictReader(f))
-    assert not any(r.get("std_id") == "친환경제품_확대희망품목" for r in src_rows), \
-        "표 3-60 이 소스 CSV 에 이미 있음 — 이 테스트 전제(누락)와 다름"
+    assert not any(r.get("std_id") == "친환경제품_확대희망품목" and r.get("year") == "2023"
+                   for r in src_rows), \
+        "2023 표 3-60 이 소스 CSV 에 이미 있음 — 이 테스트 전제(누락)와 다름"
 
     # 2) confirmed_only_rows 가 사람 확정값으로 그 표를 복원해야 한다.
     restored = corrections.confirmed_only_rows(src_rows)

@@ -56,14 +56,24 @@ def test_term_normalize_carbon_to_epd():
     rows = [
         {"std_id": "탄소성적표지_인지도", "std_label": "탄소성적표지 인지도",
          "std_response_label": "인지", "year": "2015", "value": "50.0", "unit": "%"},
-        {"std_id": "탄소발자국_인지도", "std_label": "탄소발자국 인지도",
-         "std_response_label": "인지", "year": "2018", "value": "60.0", "unit": "%"},
+        {"std_id": "탄소발자국_우선구매이유", "std_label": "탄소발자국 우선 구매 이유",
+         "std_response_label": "이유", "year": "2018", "value": "60.0", "unit": "%"},
     ]
     out = std_aliases.apply_aliases(rows)
-    assert {r["std_id"] for r in out} == {"환경성적표지_인지도"}
+    assert {r["std_id"] for r in out} == {"환경성적표지_인지도", "환경성적표지_우선구매이유"}
     assert all("환경성적표지" in r["std_label"] for r in out)
     # 저탄소제품은 영향 없음
     assert std_aliases._normalize_terms("저탄소제품_인지도") == "저탄소제품_인지도"
+
+
+def test_carbon_footprint_awareness_is_exempt():
+    # 2017 탄소발자국(구 탄소성적표지) 마크 인지도는 환경성적표지 로고 인지도와
+    # 별개 표 → 용어정규화 제외(사용자 확정). 이 id 만 환경성적표지로 합쳐지지 않는다.
+    rows = [{"std_id": "탄소발자국_인지도", "std_label": "탄소발자국 인지도",
+             "std_response_label": "비인지", "year": "2017", "value": "22.4", "unit": "%"}]
+    out = std_aliases.apply_aliases(rows)
+    assert out[0]["std_id"] == "탄소발자국_인지도"
+    assert "탄소발자국" in out[0]["std_label"]
 
 
 def test_response_canon_connects_eras():
