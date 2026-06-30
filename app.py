@@ -794,9 +794,359 @@ def render_step_index(ctx: dict, gate=None) -> None:
     st.write(f"현재 인덱스 청크: {ctx['index_count']}")
 
 
+# 핵심 정책 지표 탭: 사용자가 추적하고 싶어 한 지표를 std_id 로 묶는다.
+# 데이터에 실제 있는 std_id 만 그린다(없으면 '데이터 없음'으로 정직하게 표시 — 추측 금지).
+PRIORITY_GROUPS = [
+    ("주요 인증제도 인지도 추이", ["환경표지_인지도", "환경성적표지_인지도", "저탄소제품_인지도"]),
+    ("친환경 제품 구매·관심도", ["친환경제품_구매경험", "친환경제품_관심도", "환경문제_관심도"]),
+    ("그린카드 성과 지표", ["그린카드_발급사용의향", "그린카드_사용여부",
+                            "그린카드_전반만족도", "그린카드_포인트기부의향"]),
+    ("경제적 가치(추가 지불의사)", ["친환경제품_추가지불의향"]),
+]
+
+
+def _trend_altair(series_list):
+    """ signals.Series 목록 → 연도별 추세 멀티라인 Altair 차트(없으면 None).
+        x=연도를 '실제 간격'으로 둬서 끊긴 구간(예: 2017→2023)은 길게 보이게 한다
+        (균등 간격으로 두면 6년 공백이 한 스텝처럼 보여 '가짜 인접 점프'가 됨).
+        점은 값이 실제 있는 연도에만 찍는다 — 보간/추측 없음. """
+    import altair as alt
+    import pandas as pd
+
+    recs = [{"연도": p.year, "값": p.value, "응답": s.label, "단위": s.unit or ""}
+            for s in series_list for p in s.points]
+    if not recs:
+        return None
+    df = pd.DataFrame(recs)
+    chart = (
+        alt.Chart(df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("연도:Q", axis=alt.Axis(format="d", tickMinStep=1, title="연도")),
+            y=alt.Y("값:Q", title="%"),
+            color=alt.Color("응답:N", title="응답 항목",
+                            legend=alt.Legend(orient="bottom", columns=2)),
+            tooltip=[alt.Tooltip("응답:N", title="응답"),
+                     alt.Tooltip("연도:Q", format="d"),
+                     alt.Tooltip("값:Q", title="값"),
+                     alt.Tooltip("단위:N", title="단위")],
+        )
+        .properties(height=300)
+    )
+    return chart
+
+
+def _render_indicator_card(ind, threshold, max_series: int = 6):
+    """ 한 지표(Indicator)를 카드로: 멀티라인 차트 + 응답별 최신값·신호 + 출처.
+        라벨이 많으면 변화 큰 max_series 개만 차트에 그린다(compute_signals 가 정렬해 둠). """
+    top_series = ind.series[:max_series]
+    with st.container(border=True):
+        st.markdown(f"**{ind.label}**")
+        if ind.summary:
+            st.caption(ind.summary)
+        chart = _trend_altair(top_series)
+        if chart is not None:
+            st.altair_chart(chart, use_container_width=True)
+        for s in top_series:
+            sig = s.signal(threshold)
+            em = signals.SIGNAL_EMOJI.get(sig, "·")
+            if sig:
+                tail = f" ({s.delta:+}%p {signals.SIGNAL_TEXT[sig]})"
+            elif s.delta is not None and s.unit != "%":
+                tail = f" (Δ{s.delta:+}, 비% 단위)"
+            elif s.delta is not None:
+                tail = f" (Δ{s.delta:+}%p, 비인접년 — 신호 없음)"
+            else:
+                tail = ""
+            st.write(f"{em} {s.label}: {s.latest.value}{s.unit}{tail}")
+        head = top_series[0]
+        st.caption(f"[출처: {head.source} p.{head.page}]")
+        if len(ind.series) > max_series:
+            st.caption(f"… 외 {len(ind.series) - max_series}개 응답 항목은 변화가 작아 생략했습니다.")
+
+
+def _render_core_indicators(all_inds, threshold):
+    """ '핵심 정책 지표' 탭: PRIORITY_GROUPS 의 지표를 추이 카드로. YoY 토글과 무관하게
+        전체(추세가능) 지표에서 찾아 항상 보여준다. """
+    by_id = {ind.std_id: ind for ind in all_inds}
+    st.caption("정책 성과의 핵심 지표를 연도별 추이로 모았습니다. "
+               "데이터에 실제 연결된 시계열만 그립니다(없는 지표는 추측하지 않습니다).")
+    missing: list[str] = []
+    for title, ids in PRIORITY_GROUPS:
+        present = [by_id[i] for i in ids if i in by_id]
+        missing += [i for i in ids if i not in by_id]
+        if not present:
+            continue
+        st.markdown(f"#### {title}")
+        for ind in present:
+            _render_indicator_card(ind, threshold)
+    if missing:
+        st.caption("ℹ️ 현재 정형 데이터에 시계열로 잡히지 않는 지표: " + ", ".join(missing))
+    st.caption("ℹ️ '제도별 정인지율(정의를 정확히 아는 비중)'은 현재 데이터에 단독 지표로 "
+               "없어 표시하지 않습니다 — 추측해 그리지 않습니다.")
+
+
+# -----------------------------------------------------------------------------
+# 2단계 시각화: 순위(범프)·구성(히트맵)·우선순위(파레토)
+#   공통 원칙(추측 금지): 연도별로 라벨 표기가 흔들리는(드리프트) 항목이 많아,
+#   '여러 해에 걸쳐 같은 라벨로 잡힌 것'만 시계열 비교에 쓴다. 드물게 나온 라벨은
+#   잇지 않고 빼며(몇 개 뺐는지 캡션으로 밝힘), 단일연도 스냅샷(파레토)만 원본을 쓴다.
+# -----------------------------------------------------------------------------
+def _consistent_series(ind, max_items: int = 12):
+    """ 한 지표에서 '연도 대부분(전체-1년 이상)에 같은 라벨로 등장한' 시계열만 추린다.
+        반환: (시계열들, 표시연도들, 제외한 라벨 수). 라벨 드리프트로 인한 가짜 연결 방지. """
+    years = sorted({p.year for s in ind.series for p in s.points})
+    if len(years) < 2:
+        return [], years, len(ind.series)
+    need = max(2, len(years) - 1)
+    kept = [s for s in ind.series if len({p.year for p in s.points}) >= need]
+    kept.sort(key=lambda s: s.latest.value, reverse=True)
+    dropped = len(ind.series) - len(kept[:max_items])
+    return kept[:max_items], years, dropped
+
+
+def _bump_chart(series_kept, years):
+    """ 범프 차트: 연도별로 값이 큰 순서(순위)를 이어 '순위 이동'을 보여준다.
+        값 자체가 아니라 '그 해 안에서 몇 위였나'라 다중응답(합>100%)에도 정직하다. """
+    import altair as alt
+    import pandas as pd
+
+    recs = [{"year": p.year, "label": s.label, "val": p.value}
+            for s in series_kept for p in s.points if p.year in years]
+    if not recs:
+        return None
+    df = pd.DataFrame(recs)
+    df["rank"] = df.groupby("year")["val"].rank(method="min", ascending=False).astype(int)
+    n = int(df["rank"].max())
+    base = alt.Chart(df).encode(
+        # 도메인을 [n+0.5, 0.5] 로 직접 줘서 1위가 위, n위가 아래로 고르게 퍼지게 한다
+        # (zero 포함/reverse 자동도메인이 순위들을 위쪽에 뭉치게 하던 문제 방지).
+        x=alt.X("year:O", title="연도"),
+        y=alt.Y("rank:Q", scale=alt.Scale(domain=[n + 0.5, 0.5], zero=False, nice=False),
+                axis=alt.Axis(format="d", tickMinStep=1, title="순위 (1 = 최상위)")),
+        color=alt.Color("label:N", title="항목",
+                        legend=alt.Legend(orient="right", columns=1)),
+        detail="label:N",
+        tooltip=[alt.Tooltip("label:N", title="항목"), alt.Tooltip("year:O", title="연도"),
+                 alt.Tooltip("val:Q", title="값(%)"), alt.Tooltip("rank:Q", title="순위")],
+    )
+    return base.mark_line(point=True, strokeWidth=3).properties(height=360)
+
+
+def _heatmap_chart(series_kept, years):
+    """ 히트맵: 연도(가로)×항목(세로), 칸 색 진하기 = 값(%). 셀에 수치도 표기.
+        올드미디어 감소·뉴미디어 증가처럼 '여러 해의 분포 이동'을 한눈에 보기 좋다. """
+    import altair as alt
+    import pandas as pd
+
+    recs = [{"year": p.year, "label": s.label, "val": p.value}
+            for s in series_kept for p in s.points if p.year in years]
+    if not recs:
+        return None
+    df = pd.DataFrame(recs)
+    # 비중 평균이 큰 경로를 위로(세로축 정렬). base 엔 color 가 없어 -color 정렬은 무효이므로
+    # 값 평균 기준 정렬을 명시한다(이게 없으면 레이어 차트가 렌더되지 않던 문제 수정).
+    y_sort = alt.EncodingSortField(field="val", op="mean", order="descending")
+    base = alt.Chart(df).encode(
+        x=alt.X("year:O", title="연도"),
+        y=alt.Y("label:N", title="인지 경로", sort=y_sort,
+                axis=alt.Axis(labelOverlap=False, labelLimit=200)),
+    )
+    rect = base.mark_rect().encode(
+        color=alt.Color("val:Q", title="%", scale=alt.Scale(scheme="greens")),
+        tooltip=[alt.Tooltip("label:N", title="경로"), alt.Tooltip("year:O", title="연도"),
+                 alt.Tooltip("val:Q", title="값(%)")],
+    )
+    text = base.mark_text(baseline="middle", fontSize=10).encode(
+        text=alt.Text("val:Q", format=".0f"),
+        color=alt.condition("datum.val > 25", alt.value("white"), alt.value("black")),
+    )
+    height = max(220, 32 * df["label"].nunique())
+    return (rect + text).properties(height=height)
+
+
+def _pareto_chart(pairs):
+    """ 파레토 차트: 막대(값 내림차순) + 누적 % 꺾은선. '소수의 이유가 대부분을 차지'를
+        보여줘 우선순위 결정에 쓴다. 누적 %는 '표시된 응답 값 합' 기준이다. """
+    import altair as alt
+    import pandas as pd
+
+    pairs = sorted([(l, v) for l, v in pairs if v is not None], key=lambda t: -t[1])
+    if not pairs:
+        return None
+    total = sum(v for _, v in pairs) or 1.0
+    recs, cum = [], 0.0
+    for label, v in pairs:
+        cum += v
+        recs.append({"label": label, "val": v, "cum": round(cum / total * 100, 1)})
+    df = pd.DataFrame(recs)
+    order = [r["label"] for r in recs]
+    bar = alt.Chart(df).mark_bar(color="#5B8FF9").encode(
+        x=alt.X("label:N", sort=order, axis=alt.Axis(labelAngle=-40, labelLimit=240, title=None)),
+        y=alt.Y("val:Q", title="%"),
+        tooltip=[alt.Tooltip("label:N", title="이유"), alt.Tooltip("val:Q", title="값(%)"),
+                 alt.Tooltip("cum:Q", title="누적 %")],
+    )
+    line = alt.Chart(df).mark_line(point=True, color="#E8684A").encode(
+        x=alt.X("label:N", sort=order),
+        y=alt.Y("cum:Q", title="누적 %", scale=alt.Scale(domain=[0, 100])),
+    )
+    return alt.layer(bar, line).resolve_scale(y="independent").properties(height=360)
+
+
+def _inds_by_substr(all_inds, needle):
+    """ std_id 에 needle 이 든 지표들(시계열 비교 가능한 것; |Δ| 큰 순 정렬 유지). """
+    return [i for i in all_inds if needle in i.std_id]
+
+
+def _raw_indicators_by_category(rows, category):
+    """ 원본 행에서 해당 카테고리의 (std_id, std_label, 연도들). 단일연도 항목도 포함
+        (파레토는 한 해 스냅샷이라 시계열 최소커버리지에 안 걸려도 보여줄 수 있다). """
+    out: dict[str, dict] = {}
+    for r in rows:
+        if (r.get("category") or "").strip() != category:
+            continue
+        if not (r.get("value") or "").strip():
+            continue
+        sid = (r.get("std_id") or "").strip()
+        if not sid:
+            continue
+        d = out.setdefault(sid, {"label": (r.get("std_label") or sid).strip(), "years": set()})
+        y = (r.get("year") or "").strip()
+        if y:
+            d["years"].add(y)
+    return [(sid, d["label"], sorted(d["years"])) for sid, d in out.items()]
+
+
+def _raw_pairs(rows, std_id, year):
+    """ (std_id, year) 한 해의 (응답라벨, 값%) 목록. 파레토용 단일연도 스냅샷. """
+    pairs = []
+    for r in rows:
+        if (r.get("std_id") or "").strip() != std_id or (r.get("year") or "").strip() != year:
+            continue
+        label = (r.get("std_response_label") or r.get("response_label") or "").strip()
+        raw = (r.get("value") or "").strip()
+        try:
+            v = float(raw)
+        except ValueError:
+            continue
+        if label:
+            pairs.append((label, v))
+    return pairs
+
+
+# 질문/키워드 필터: 입력한 단어가 든 지표만 모든 탭에서 보이게 한다(LLM 없이 텍스트 매칭).
+def _ind_haystack(ind):
+    """ 한 지표의 검색 대상 텍스트(지표명·카테고리·요약·응답 라벨)를 소문자로 합쳐 돌려준다. """
+    return " ".join([ind.label, ind.category, ind.summary]
+                    + [s.label for s in ind.series]).lower()
+
+
+def _match_terms(haystack, terms):
+    """ 입력어 모두(AND)가 텍스트에 들어 있으면 True. terms 가 비면 항상 True(전체 표시). """
+    return all(t in haystack for t in terms)
+
+
+def _filter_inds(inds, terms):
+    """ 입력어로 지표 목록을 좁힌다(terms 비면 그대로). """
+    if not terms:
+        return inds
+    return [i for i in inds if _match_terms(_ind_haystack(i), terms)]
+
+
+def _render_judgment_tab(all_inds):
+    """ '판단 기준' 탭: 친환경제품 판단 기준의 순위 이동(범프 차트). """
+    import altair as alt
+
+    st.caption("연도별로 어떤 판단 기준이 상위였는지(순위)를 이어 봅니다. "
+               "값이 아닌 '그 해의 순위'라 다중응답에도 정직합니다.")
+    cands = _inds_by_substr(all_inds, "판단기준")
+    if not cands:
+        st.info("판단 기준 시계열 데이터가 없습니다.")
+        return
+    # 일관 라벨이 많은(=순위 비교가 잘 되는) 지표를 기본으로 위에 둔다.
+    cands.sort(key=lambda i: len(_consistent_series(i)[0]), reverse=True)
+    choice = st.selectbox("지표", cands, format_func=lambda i: i.label, key="bump_pick")
+    kept, years, dropped = _consistent_series(choice)
+    if len(kept) < 2:
+        st.warning("이 지표는 연도별 라벨 표기가 일관되지 않아(드리프트) 순위 비교가 어렵습니다. "
+                   "다른 지표(예: 복수응답 버전)를 선택해 보세요.")
+        return
+    chart = _bump_chart(kept, years)
+    if chart is not None:
+        st.altair_chart(chart, use_container_width=True)
+    st.caption(f"📅 {years[0]}~{years[-1]} · 일관 라벨 {len(kept)}개로 비교"
+               + (f" (라벨 표기가 흔들리는 {dropped}개는 제외 — 추측 연결 안 함)" if dropped else ""))
+    head = kept[0]
+    st.caption(f"[출처: {head.source} p.{head.page}]")
+
+
+def _render_channel_tab(all_inds):
+    """ '인지 경로' 탭: 연도×경로 히트맵(올드/뉴미디어 변화). """
+    st.caption("정보를 어떤 경로로 접했는지를 연도×경로 히트맵으로 봅니다. "
+               "칸이 진할수록 비중이 높습니다(올드미디어 감소·뉴미디어 증가 대비에 적합).")
+    cands = _inds_by_substr(all_inds, "인지경로")
+    if not cands:
+        st.info("인지 경로 시계열 데이터가 없습니다.")
+        return
+    # 일관 라벨이 많은(=히트맵이 잘 그려지는) 지표를 기본으로 위에 둔다.
+    cands.sort(key=lambda i: len(_consistent_series(i)[0]), reverse=True)
+    choice = st.selectbox("지표", cands, format_func=lambda i: i.label, key="heat_pick")
+    kept, years, dropped = _consistent_series(choice)
+    if len(kept) < 2:
+        st.warning("이 지표는 연도별 경로 표기가 일관되지 않아(드리프트) 히트맵 비교가 어렵습니다. "
+                   "다른 지표를 선택해 보세요.")
+        return
+    chart = _heatmap_chart(kept, years)
+    if chart is not None:
+        st.altair_chart(chart, use_container_width=True)
+    st.caption(f"📅 {years[0]}~{years[-1]} · 일관 경로 {len(kept)}개"
+               + (f" (표기가 흔들리는 {dropped}개는 제외)" if dropped else ""))
+    head = kept[0]
+    st.caption(f"[출처: {head.source} p.{head.page}]")
+
+
+def _render_barrier_tab(rows, terms):
+    """ '구매 장벽' 탭: 선택 연도의 장애 요인을 파레토 차트로(빈도순 + 누적%). """
+    st.caption("구매를 주저하는 이유를 빈도 내림차순 막대 + 누적 % 꺾은선(파레토)으로 봅니다. "
+               "어떤 이유부터 해결하면 효과가 큰지 우선순위를 보여줍니다.")
+    cands = _raw_indicators_by_category(rows, "구매 장벽")
+    if not cands:
+        st.info("구매 장벽 데이터가 없습니다.")
+        return
+    if terms:
+        # 입력어로 좁히기: 지표명 + 그 지표의 응답 라벨(이유)까지 포함해 매칭한다.
+        hay: dict[str, str] = {}
+        for r in rows:
+            if (r.get("category") or "").strip() != "구매 장벽":
+                continue
+            sid = (r.get("std_id") or "").strip()
+            lab = (r.get("std_response_label") or r.get("response_label") or "").strip()
+            hay[sid] = hay.get(sid, "") + " " + lab.lower()
+        cands = [(sid, lab, yrs) for sid, lab, yrs in cands
+                 if _match_terms((lab.lower() + hay.get(sid, "")), terms)]
+        if not cands:
+            st.info("입력한 질문에 해당하는 구매 장벽 항목이 없습니다. 입력어를 바꾸거나 비워 보세요.")
+            return
+    cands.sort(key=lambda t: (-len(t[2]), t[1]))   # 연도 많은 지표를 위로
+    labels = [f"{lab}  ({yrs[0]}~{yrs[-1]})" if len(yrs) > 1 else f"{lab}  ({yrs[0] if yrs else '-'})"
+              for _, lab, yrs in cands]
+    idx = st.selectbox("지표", range(len(cands)), format_func=lambda i: labels[i], key="pareto_pick")
+    sid, lab, yrs = cands[idx]
+    year = st.selectbox("연도", list(reversed(yrs)), key="pareto_year")   # 최신 연도 기본
+    pairs = _raw_pairs(rows, sid, year)
+    chart = _pareto_chart(pairs)
+    if chart is None:
+        st.info("선택한 연도에 표시할 값이 없습니다.")
+        return
+    st.altair_chart(chart, use_container_width=True)
+    src = next((r.get("source", "") for r in rows
+                if (r.get("std_id") or "").strip() == sid and (r.get("year") or "").strip() == year), "")
+    st.caption(f"📊 {lab} · {year}년 · 응답 {len(pairs)}개 · [출처: {src}]")
+
+
 def render_step_signal(ctx: dict) -> None:
     """ 6단계 · 실시간 신호등. 정형 데이터의 응답 항목을 연도별로 이어 추세 신호로 표시. """
-    import pandas as pd
 
     st.subheader("🚦 6단계 · 실시간 신호등 (연도별 추세)")
     st.caption(
@@ -813,6 +1163,14 @@ def render_step_signal(ctx: dict) -> None:
 
     ds_years = signals.dataset_years(rows)
 
+    # 질문/키워드 입력 — 입력하면 모든 탭이 '그 질문에 해당하는 항목'만 보이도록 좁힌다.
+    query = st.text_input(
+        "🔎 질문/키워드로 항목 좁히기",
+        placeholder="예: 환경표지 인지도 · 그린카드 · 가격 · 관심도 …  (비우면 전체 표시)",
+        help="입력한 단어가 들어간 지표만 모든 탭에서 보여줍니다(지표명·카테고리·요약·응답 라벨 대상). "
+             "공백으로 여러 단어를 넣으면 모두 포함하는 항목만 남습니다. LLM 없이 데이터 텍스트만 매칭합니다.")
+    terms = [t.lower() for t in query.split() if t.strip()]
+
     c_th, c_cov = st.columns([3, 2])
     with c_th:
         threshold = st.slider("신호 임계값 (이 %p 이상 변하면 상승/하락)",
@@ -825,73 +1183,74 @@ def render_step_signal(ctx: dict) -> None:
                  "어느 모드든 인접 연도일 때만 매겨, 끊긴 구간의 가짜 큰 변동은 신호로 잡지 않습니다.")
 
     all_inds = signals.compute_signals(rows, threshold_pp=threshold, min_coverage=2)
+    all_inds = _filter_inds(all_inds, terms)   # 입력한 질문에 해당하는 지표만 남긴다
     if recent_yoy_only:
         inds = [i for i in all_inds if any(s.is_yoy for s in i.series)]
     else:
         inds = all_inds
     st.caption(f"📅 데이터 연도: {'·'.join(map(str, ds_years))} · "
                f"{len(inds)}문항 표시"
+               + (f" · 🔎 '{query}' 필터" if terms else "")
                + (f" (전체 추세가능 {len(all_inds)}문항 중 최근 연속년만)"
                   if recent_yoy_only else " (2개년 이상 전체 추세)"))
     if not inds:
-        st.info("표시할 추세 데이터가 없습니다. '최근 연속년(YoY) 항목만'을 끄거나 "
-                "여러 연도의 PDF를 인제스트해 보세요.")
+        if terms:
+            st.info(f"🔎 '{query}'에 해당하는 추세 항목이 없습니다. 입력어를 바꾸거나 비워 전체를 보세요.")
+        else:
+            st.info("표시할 추세 데이터가 없습니다. '최근 연속년(YoY) 항목만'을 끄거나 "
+                    "여러 연도의 PDF를 인제스트해 보세요.")
         return
 
-    counts = signals.summarize(inds, threshold)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("🟢 상승", counts["up"])
-    c2.metric("🟡 보합", counts["flat"])
-    c3.metric("🔴 하락", counts["down"])
+    tab_trend, tab_core, tab_judge, tab_chan, tab_barrier = st.tabs(
+        ["🚦 추세 신호", "📊 핵심 정책 지표", "🧭 판단 기준", "📡 인지 경로", "🚧 구매 장벽"])
 
-    # 가장 큰 변화(최근 두 연도) — 신호 있는 시계열만, |Δ| 큰 순 8개 카드.
-    st.markdown("#### 가장 큰 변화 (최근 두 연도)")
-    movers = [(ind, s) for ind in inds for s in ind.series if s.signal(threshold)]
-    movers.sort(key=lambda t: abs(t[1].delta), reverse=True)
-    cols = st.columns(4)
-    for i, (ind, s) in enumerate(movers[:8]):
-        sig = s.signal(threshold)
-        with cols[i % 4]:
-            st.metric(
-                label=f"{signals.SIGNAL_EMOJI[sig]} {ind.label} · {s.label}",
-                value=f"{s.latest.value}{s.unit}",
-                delta=f"{s.delta:+}%p",
-                delta_color="normal" if sig in ("up", "down") else "off",
-            )
-            st.caption(f"[출처: {s.source} p.{s.page}]")
+    with tab_trend:
+        counts = signals.summarize(inds, threshold)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("🟢 상승", counts["up"])
+        c2.metric("🟡 보합", counts["flat"])
+        c3.metric("🔴 하락", counts["down"])
 
-    st.divider()
-    # 카테고리별 추세 — 선택한 카테고리에서 변화 큰 지표 위주로 차트.
-    st.markdown("#### 카테고리별 추세")
-    cats = signals.categories(inds)
-    cat = st.selectbox("카테고리", cats)
-    in_cat = [i for i in inds if i.category == cat]   # compute_signals 가 |Δ| 큰 순으로 정렬됨
-    LIMIT = 10
-    for ind in in_cat[:LIMIT]:
-        with st.container(border=True):
-            st.markdown(f"**{ind.label}**")
-            if ind.summary:
-                st.caption(ind.summary)
-            top_series = ind.series[:6]   # 라벨이 많으면 변화 큰 6개만 차트에
-            years = sorted({p.year for s in top_series for p in s.points})
-            data = {s.label: [dict((p.year, p.value) for p in s.points).get(y) for y in years]
-                    for s in top_series}
-            st.line_chart(pd.DataFrame(data, index=[str(y) for y in years]))
-            for s in top_series:
-                sig = s.signal(threshold)
-                em = signals.SIGNAL_EMOJI.get(sig, "·")
-                if sig:
-                    tail = f" ({s.delta:+}%p {signals.SIGNAL_TEXT[sig]})"
-                elif s.delta is not None:
-                    tail = f" (Δ{s.delta:+}, 비% 단위)"
-                else:
-                    tail = ""
-                st.write(f"{em} {s.label}: {s.latest.value}{s.unit}{tail}")
-            head = top_series[0]
-            st.caption(f"[출처: {head.source} p.{head.page}]")
-    if len(in_cat) > LIMIT:
-        st.caption(f"… 외 {len(in_cat) - LIMIT}개 지표는 변화가 작아 생략했습니다 "
-                   f"(임계값을 낮추거나 다른 카테고리에서 확인하세요).")
+        # 가장 큰 변화(최근 두 연도) — 신호 있는 시계열만, |Δ| 큰 순 8개 카드.
+        st.markdown("#### 가장 큰 변화 (최근 두 연도)")
+        movers = [(ind, s) for ind in inds for s in ind.series if s.signal(threshold)]
+        movers.sort(key=lambda t: abs(t[1].delta), reverse=True)
+        cols = st.columns(4)
+        for i, (ind, s) in enumerate(movers[:8]):
+            sig = s.signal(threshold)
+            with cols[i % 4]:
+                st.metric(
+                    label=f"{signals.SIGNAL_EMOJI[sig]} {ind.label} · {s.label}",
+                    value=f"{s.latest.value}{s.unit}",
+                    delta=f"{s.delta:+}%p",
+                    delta_color="normal" if sig in ("up", "down") else "off",
+                )
+                st.caption(f"[출처: {s.source} p.{s.page}]")
+
+        st.divider()
+        # 카테고리별 추세 — 선택한 카테고리에서 변화 큰 지표 위주로 차트.
+        st.markdown("#### 카테고리별 추세")
+        cats = signals.categories(inds)
+        cat = st.selectbox("카테고리", cats)
+        in_cat = [i for i in inds if i.category == cat]   # compute_signals 가 |Δ| 큰 순으로 정렬됨
+        LIMIT = 10
+        for ind in in_cat[:LIMIT]:
+            _render_indicator_card(ind, threshold)
+        if len(in_cat) > LIMIT:
+            st.caption(f"… 외 {len(in_cat) - LIMIT}개 지표는 변화가 작아 생략했습니다 "
+                       f"(임계값을 낮추거나 다른 카테고리에서 확인하세요).")
+
+    with tab_core:
+        _render_core_indicators(all_inds, threshold)
+
+    with tab_judge:
+        _render_judgment_tab(all_inds)
+
+    with tab_chan:
+        _render_channel_tab(all_inds)
+
+    with tab_barrier:
+        _render_barrier_tab(rows, terms)
 
 
 # -----------------------------------------------------------------------------
