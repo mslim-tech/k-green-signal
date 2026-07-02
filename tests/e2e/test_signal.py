@@ -74,4 +74,5 @@ def test_signal_query_summary_panel(page: Page, base_url: str):
     expect(page.get_by_text(re.compile("지표별 현재 성적표"))).to_be_visible(timeout=15000)
     expect(page.get_by_text(re.compile("가장 크게 상승 Top3"))).to_be_visible(timeout=15000)
     expect(page.get_by_text(re.compile("가장 크게 하락 Top3"))).to_be_visible(timeout=15000)
+    expect(page.get_by_text(re.compile("행동 동기"))).to_be_visible(timeout=15000)
     expect(page.get_by_text(re.compile("상세 근거"))).to_be_visible(timeout=15000)

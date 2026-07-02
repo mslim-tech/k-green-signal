@@ -973,7 +973,57 @@ def _render_status_scorecards(inds, max_cards: int = 6):
         st.caption(f"… 외 {len(inds) - max_cards}개 지표는 아래 탭에서 확인하세요.")
 
 
-def _render_query_summary(inds, threshold, query, ds_years):
+def _top1_latest(ind):
+    """ 이 지표의 '최신 연도 1순위'(=최신 연도에서 값이 가장 큰 응답). (연도, 라벨, 값, 출처, page). """
+    ly = max(p.year for s in ind.series for p in s.points)
+    best = None
+    for s in ind.series:
+        for p in s.points:
+            if p.year == ly and (best is None or p.value > best[2]):
+                best = (ly, s.label, p.value, s.source, s.page)
+    return best
+
+
+def _pick_context(inds, key_sub, terms):
+    """ 판단기준/비구매이유 같은 '맥락' 지표를 고른다: 1순위(복수응답 제외) 중 →
+        쿼리 매칭 우선 → 친환경제품_ 플래그십 우선 → 커버리지 최장. 없으면 None. """
+    cands = [i for i in inds if key_sub in i.std_id and "복수응답" not in i.std_id]
+    if not cands:
+        return None
+    if terms:
+        matched = [i for i in cands if _match_terms(_ind_haystack(i), terms)]
+        if matched:
+            cands = matched
+    flag = [i for i in cands if i.std_id.startswith("친환경제품_")]
+    pool = flag or cands
+    return max(pool, key=lambda i: len(i.series[0].points))
+
+
+def _render_drivers_barriers(full_inds, terms):
+    """ 행동 동기·장애(#5): 구매 판단 기준 1순위 + 비구매 이유 1순위. 실제 지표만(추측 없음).
+        쿼리에 관련 지표가 있으면 그걸, 없으면 친환경제품 전반 지표를 맥락으로 보여준다. """
+    crit = _pick_context(full_inds, "판단기준", terms)
+    barr = _pick_context(full_inds, "비구매이유", terms)
+    if not crit and not barr:
+        return
+    st.markdown("**🧭 행동 동기 · 장애 요인**")
+    st.caption("구매를 이끈 판단 기준 1순위 · 구매를 막은 비구매 이유 1순위")
+    cc, cb = st.columns(2)
+    with cc:
+        if crit and (t := _top1_latest(crit)):
+            st.markdown(f"🎯 **구매 판단 1순위** ({t[0]})  \n{t[1]} · **{t[2]}%**")
+            st.caption(f"{crit.label} · [출처: {t[3]} p.{t[4]}]")
+        else:
+            st.caption("판단 기준 데이터 없음")
+    with cb:
+        if barr and (t := _top1_latest(barr)):
+            st.markdown(f"🚧 **비구매 이유 1순위** ({t[0]})  \n{t[1]} · **{t[2]}%**")
+            st.caption(f"{barr.label} · [출처: {t[3]} p.{t[4]}]")
+        else:
+            st.caption("비구매 이유 데이터 없음")
+
+
+def _render_query_summary(inds, threshold, query, ds_years, full_inds):
     """ 검색어 요약(결론 먼저): 근거 있는 signals 만으로 ①키워드 요약 ②상승/보합/하락 수
         ③최대 상승 Top3 ④최대 하락 Top3. '추측은 데이터가 아니다' — 하위집단/외부뉴스는 안 만든다. """
     with st.container(border=True):
@@ -1010,6 +1060,9 @@ def _render_query_summary(inds, threshold, query, ds_years):
                 _mover_line(ind, s, threshold)
             if not downs:
                 st.caption("뚜렷한 하락(인접연도) 항목 없음")
+
+        st.divider()
+        _render_drivers_barriers(full_inds, [t for t in query.lower().split() if t.strip()])
 
         # 신호가 하나도 없으면(모두 비인접/보합) 최신값만이라도 알려준다.
         if not movers:
@@ -1350,8 +1403,8 @@ def render_step_signal(ctx: dict) -> None:
                  "연도가 인접(전년대비 비교 가능)한 항목만 봅니다. 신호(🟢🟡🔴)는 "
                  "어느 모드든 인접 연도일 때만 매겨, 끊긴 구간의 가짜 큰 변동은 신호로 잡지 않습니다.")
 
-    all_inds = signals.compute_signals(rows, threshold_pp=threshold, min_coverage=2)
-    all_inds = _filter_inds(all_inds, terms)   # 입력한 질문에 해당하는 지표만 남긴다
+    full_inds = signals.compute_signals(rows, threshold_pp=threshold, min_coverage=2)
+    all_inds = _filter_inds(full_inds, terms)   # 입력한 질문에 해당하는 지표만 남긴다
     if recent_yoy_only:
         inds = [i for i in all_inds if any(s.is_yoy for s in i.series)]
     else:
@@ -1372,7 +1425,7 @@ def render_step_signal(ctx: dict) -> None:
     # 검색어가 있으면 '결론 먼저': 상단에 근거 있는 핵심 요약(키워드 요약·신호 집계·
     # 최대 상승/하락 Top3)을 보여주고, 아래 탭은 '상세 근거'로 둔다.
     if terms:
-        _render_query_summary(inds, threshold, query, ds_years)
+        _render_query_summary(inds, threshold, query, ds_years, full_inds)
         st.divider()
         st.markdown("### 📊 상세 근거 (연도별 추이)")
 
