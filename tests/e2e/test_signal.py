@@ -59,3 +59,18 @@ def test_signal_query_filter_narrows_items(page: Page, base_url: str):
     box.fill("그린카드")
     box.press("Enter")
     expect(page.get_by_text(re.compile(r"🔎 '그린카드' 필터"))).to_be_visible(timeout=15000)
+
+
+def test_signal_query_summary_panel(page: Page, base_url: str):
+    """ 검색어를 넣으면 상단에 '결론 먼저' 핵심 요약(신호 집계 + 상승/하락 Top3)이 뜨고,
+        아래는 '상세 근거'로 기존 차트가 남는다. (근거 있는 signals 만으로 구성) """
+    _goto(page)
+    page.get_by_role("button", name=re.compile(r"6\. 🚦 신호등")).click()
+    expect(page.locator("[data-testid='step6-status']")).to_have_text("current", timeout=15000)
+    box = page.get_by_placeholder(re.compile("환경표지 인지도"))
+    box.fill("환경표지")
+    box.press("Enter")
+    expect(page.get_by_text(re.compile(r"핵심 요약 \(결론\)"))).to_be_visible(timeout=15000)
+    expect(page.get_by_text(re.compile("가장 크게 상승 Top3"))).to_be_visible(timeout=15000)
+    expect(page.get_by_text(re.compile("가장 크게 하락 Top3"))).to_be_visible(timeout=15000)
+    expect(page.get_by_text(re.compile("상세 근거"))).to_be_visible(timeout=15000)

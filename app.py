@@ -917,6 +917,72 @@ def _render_indicator_card(ind, threshold, max_series: int = 6):
             st.caption(f"… 외 {len(ind.series) - max_series}개 응답 항목은 변화가 작아 생략했습니다.")
 
 
+def _summary_headline_series(ind):
+    """ 요약(현재 성적표)에 쓸 대표 시계열: % 단위 중 커버리지 최장(동률이면 최신값 큰) 것.
+        %가 없으면 그냥 첫 시계열. compute_signals 정렬과 무관하게 '대표 라인'을 고른다. """
+    cands = [s for s in ind.series if s.unit == "%"] or ind.series
+    return max(cands, key=lambda s: (len(s.points), s.latest.value))
+
+
+def _mover_line(ind, s, threshold):
+    """ 요약용 한 줄: 지표·응답 · 현재값(#1) · 전년대비(#2) · 12개년 평균 대비(#3) · 출처.
+        데이터에 실제 있는 값만 쓴다(추측 없음). 척도 변경 지표는 ⚠️로 해석 유의를 알린다. """
+    sig = s.signal(threshold)
+    em = signals.SIGNAL_EMOJI.get(sig, "·")
+    vals = [p.value for p in s.points]
+    mean = round(sum(vals) / len(vals), 1)
+    pos = "평균 상회" if s.latest.value >= mean else "평균 하회"
+    cav = " · ⚠️척도변경 주의" if ind.std_id in INDICATOR_CAVEATS else ""
+    delta_txt = f"전년대비 **{s.delta:+}%p**" if (s.delta is not None and s.is_yoy) else "전년대비 —(비인접)"
+    st.markdown(
+        f"{em} **{ind.label}** · {s.label}  \n"
+        f"현재 **{s.latest.value}{s.unit}**({s.latest.year}) · {delta_txt} · "
+        f"{s.points[0].year}~평균 {mean}{s.unit}({pos}){cav}")
+    st.caption(f"[출처: {s.source} p.{s.page}]")
+
+
+def _render_query_summary(inds, threshold, query, ds_years):
+    """ 검색어 요약(결론 먼저): 근거 있는 signals 만으로 ①키워드 요약 ②상승/보합/하락 수
+        ③최대 상승 Top3 ④최대 하락 Top3. '추측은 데이터가 아니다' — 하위집단/외부뉴스는 안 만든다. """
+    with st.container(border=True):
+        st.markdown(f"### 🎯 '{query}' 핵심 요약 (결론)")
+        st.caption(f"관련 지표 {len(inds)}개 · 데이터 연도 {ds_years[0]}~{ds_years[-1]} · "
+                   "신호는 인접 연도(전년대비) 기준")
+
+        counts = signals.summarize(inds, threshold)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("🟢 상승", counts["up"])
+        c2.metric("🟡 보합", counts["flat"])
+        c3.metric("🔴 하락", counts["down"])
+
+        movers = [(ind, s) for ind in inds for s in ind.series if s.signal(threshold)]
+        ups = sorted([m for m in movers if m[1].delta > 0],
+                     key=lambda m: m[1].delta, reverse=True)[:3]
+        downs = sorted([m for m in movers if m[1].delta < 0],
+                       key=lambda m: m[1].delta)[:3]
+
+        cu, cd = st.columns(2)
+        with cu:
+            st.markdown("**📈 가장 크게 상승 Top3**")
+            for ind, s in ups:
+                _mover_line(ind, s, threshold)
+            if not ups:
+                st.caption("뚜렷한 상승(인접연도) 항목 없음")
+        with cd:
+            st.markdown("**📉 가장 크게 하락 Top3**")
+            for ind, s in downs:
+                _mover_line(ind, s, threshold)
+            if not downs:
+                st.caption("뚜렷한 하락(인접연도) 항목 없음")
+
+        # 신호가 하나도 없으면(모두 비인접/보합) 최신값만이라도 알려준다.
+        if not movers:
+            st.markdown("**현재 성적표 (최신값)**")
+            for ind in inds[:5]:
+                s = _summary_headline_series(ind)
+                st.write(f"· {ind.label} · {s.label}: **{s.latest.value}{s.unit}** ({s.latest.year})")
+
+
 def _render_core_indicators(all_inds, threshold):
     """ '핵심 정책 지표' 탭: PRIORITY_GROUPS 의 지표를 추이 카드로. YoY 토글과 무관하게
         전체(추세가능) 지표에서 찾아 항상 보여준다. """
@@ -1266,6 +1332,13 @@ def render_step_signal(ctx: dict) -> None:
             st.info("표시할 추세 데이터가 없습니다. '최근 연속년(YoY) 항목만'을 끄거나 "
                     "여러 연도의 PDF를 인제스트해 보세요.")
         return
+
+    # 검색어가 있으면 '결론 먼저': 상단에 근거 있는 핵심 요약(키워드 요약·신호 집계·
+    # 최대 상승/하락 Top3)을 보여주고, 아래 탭은 '상세 근거'로 둔다.
+    if terms:
+        _render_query_summary(inds, threshold, query, ds_years)
+        st.divider()
+        st.markdown("### 📊 상세 근거 (연도별 추이)")
 
     tab_trend, tab_core, tab_judge, tab_chan, tab_barrier = st.tabs(
         ["🚦 추세 신호", "📊 핵심 정책 지표", "🧭 판단 기준", "📡 인지 경로", "🚧 구매 장벽"])
