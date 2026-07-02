@@ -71,6 +71,7 @@ def test_signal_query_summary_panel(page: Page, base_url: str):
     box.fill("환경표지")
     box.press("Enter")
     expect(page.get_by_text(re.compile(r"핵심 요약 \(결론\)"))).to_be_visible(timeout=15000)
+    expect(page.get_by_text(re.compile("지표별 현재 성적표"))).to_be_visible(timeout=15000)
     expect(page.get_by_text(re.compile("가장 크게 상승 Top3"))).to_be_visible(timeout=15000)
     expect(page.get_by_text(re.compile("가장 크게 하락 Top3"))).to_be_visible(timeout=15000)
     expect(page.get_by_text(re.compile("상세 근거"))).to_be_visible(timeout=15000)

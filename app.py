@@ -941,6 +941,38 @@ def _mover_line(ind, s, threshold):
     st.caption(f"[출처: {s.source} p.{s.page}]")
 
 
+def _render_status_scorecards(inds, max_cards: int = 6):
+    """ 지표별 '현재 성적표': 검색어 관련 지표 각각을 카드로 —
+        #1 최신값(현재 성적표) · #2 전년대비(↑↓, st.metric 이 화살표/색 자동) ·
+        #3 12개년 평균 대비(벤치마크). 데이터에 실제 있는 값만 쓴다(추측 없음). """
+    # 대표 라인(커버리지 최장) 기준으로 정렬 — 주요 헤드라인 지표가 앞에 오게.
+    picks = sorted(inds, key=lambda i: len(_summary_headline_series(i).points),
+                   reverse=True)[:max_cards]
+    st.markdown("**📋 지표별 현재 성적표**")
+    st.caption("각 지표의 최신값 · 전년대비(↑↓) · 12개년 평균 대비")
+    cols = st.columns(3)
+    for i, ind in enumerate(picks):
+        s = _summary_headline_series(ind)
+        vals = [p.value for p in s.points]
+        mean = round(sum(vals) / len(vals), 1)
+        pos = "평균 상회" if s.latest.value >= mean else "평균 하회"
+        yoy = f"{s.delta:+}%p" if (s.delta is not None and s.is_yoy) else None
+        with cols[i % 3]:
+            st.metric(
+                label=f"{ind.label} · {s.label}",
+                value=f"{s.latest.value}{s.unit} ({s.latest.year})",
+                delta=yoy,                     # ↑/↓ 화살표·색은 metric 이 자동
+                delta_color="normal" if yoy else "off",
+            )
+            span = f"{s.points[0].year}~{s.points[-1].year}"
+            note = "" if s.is_yoy or s.delta is None else " · 전년대비 —(비인접)"
+            cav = " · ⚠️척도변경" if ind.std_id in INDICATOR_CAVEATS else ""
+            st.caption(f"{span} 평균 {mean}{s.unit} → 현재 {s.latest.value}{s.unit} **{pos}**"
+                       f"{note}{cav}  \n[출처: {s.source} p.{s.page}]")
+    if len(inds) > max_cards:
+        st.caption(f"… 외 {len(inds) - max_cards}개 지표는 아래 탭에서 확인하세요.")
+
+
 def _render_query_summary(inds, threshold, query, ds_years):
     """ 검색어 요약(결론 먼저): 근거 있는 signals 만으로 ①키워드 요약 ②상승/보합/하락 수
         ③최대 상승 Top3 ④최대 하락 Top3. '추측은 데이터가 아니다' — 하위집단/외부뉴스는 안 만든다. """
@@ -954,6 +986,10 @@ def _render_query_summary(inds, threshold, query, ds_years):
         c1.metric("🟢 상승", counts["up"])
         c2.metric("🟡 보합", counts["flat"])
         c3.metric("🔴 하락", counts["down"])
+
+        st.divider()
+        _render_status_scorecards(inds)   # 지표별 현재 성적표(#1·#2·#3)
+        st.divider()
 
         movers = [(ind, s) for ind in inds for s in ind.series if s.signal(threshold)]
         ups = sorted([m for m in movers if m[1].delta > 0],
