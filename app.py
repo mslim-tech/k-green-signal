@@ -1036,24 +1036,52 @@ def _load_external_context():
         return []
 
 
-def _render_external_context(query, inds):
-    """ 외부 맥락(#6, 큐레이션): 검색어/관련 지표에 매칭되는 그해 사건을 '참고'로 인용 표시.
-        설문 통계와 별개의 출처(url) 있는 자료만 — 추측/자동생성 아님(WebSearch로 조사·인용). """
+_INFLECTION_PP = 5.0   # 인접 연도 |전년대비|가 이 %p 이상이면 '변곡점'으로 표시(⭐)
+
+
+def _render_inflection_context(inds, query):
+    """ 변곡점 × 외부 맥락(#6 해석): 검색어에 관련된 그해 외부 이슈마다, 대표 지표가 그해
+        어떻게 움직였는지(전년대비 %p)를 나란히 보여 '이슈 ↔ 데이터 변화'를 대조한다.
+        인접 연도 |Δ|≥임계면 ⭐변곡점 표시. ⚠️ 척도 변경 구간('22~'24 caveat 지표)의 변화는
+        측정 방식 변화일 수 있어 변곡점으로 보지 않는다. 상관/맥락이며 인과 단정 아님. """
     entries = _load_external_context()
     if not entries:
         return
+    # 대표 지표 = 커버리지(연도 수) 최장. 그 대표 시계열 값을 연도별로.
+    ind = max(inds, key=lambda i: len(_summary_headline_series(i).points))
+    s = _summary_headline_series(ind)
+    byyear = {p.year: p.value for p in s.points}
+    # 이벤트 매칭은 검색어+관련 지표 전체로(넓게), 데이터 변화는 대표 지표로(구체).
     hay = (query + " " + " ".join(f"{i.label} {i.std_id}" for i in inds)).lower()
-    hits = [e for e in entries if any(kw.lower() in hay for kw in e.get("match", []))]
-    if not hits:
+    evs = sorted([e for e in entries if any(kw.lower() in hay for kw in e.get("match", []))],
+                 key=lambda e: e.get("year", 0))
+    if not evs:
         return
-    hits.sort(key=lambda e: e.get("year", 0))
+    caveated = ind.std_id in INDICATOR_CAVEATS
     st.divider()
-    st.markdown("**🗞️ 외부 맥락 (참고 · 큐레이션)**")
-    st.caption("검색어와 관련된 그해 주요 정책·사회 사건입니다. 설문 통계와 별개의 인용 자료이며, "
-               "수치 변화의 원인을 단정하지 않습니다.")
-    for e in hits:
-        st.markdown(f"· **{e.get('year','')}** — {e.get('title','')}  \n"
-                    f"　[출처: {e.get('source','')}]({e.get('url','')})")
+    st.markdown("**📈 변곡점 × 외부 맥락**")
+    st.caption(f"검색어 관련 그해 환경 이슈와, 대표 지표 '{ind.label}·{s.label}'의 그해 변화를 "
+               "대조합니다. ⭐는 그해가 데이터 변곡점(전년대비 큰 변화)임을 뜻합니다. "
+               "상관·맥락이며 인과를 단정하지 않습니다.")
+    for e in evs:
+        y = e.get("year")
+        head = f"· **{y}** {e.get('title','')} — [출처: {e.get('source','')}]({e.get('url','')})"
+        prev = [yr for yr in byyear if yr < y]
+        if y in byyear and prev:
+            py = max(prev)
+            d = round(byyear[y] - byyear[py], 1)
+            gap = y - py
+            if caveated and y in (2023, 2024):
+                tail = f"　↔ 데이터 {py}→{y}: {byyear[py]}→{byyear[y]} (⚠️ 척도 변경 구간 — 해석 유의)"
+            else:
+                star = " ⭐변곡점" if (gap == 1 and abs(d) >= _INFLECTION_PP) else ""
+                near = "" if gap == 1 else f"({py}→{y}, {gap}년 간격)"
+                tail = f"　↔ 데이터 전년대비 **{d:+}%p**{near}{star}"
+        elif y in byyear:
+            tail = f"　↔ 데이터 {y}년 {byyear[y]}{s.unit or ''} (직전 연도 없음)"
+        else:
+            tail = "　↔ 이 지표엔 그해 데이터 없음"
+        st.markdown(head + "  \n" + tail)
 
 
 def _render_query_summary(inds, threshold, query, ds_years, full_inds):
@@ -1096,7 +1124,7 @@ def _render_query_summary(inds, threshold, query, ds_years, full_inds):
 
         st.divider()
         _render_drivers_barriers(full_inds, [t for t in query.lower().split() if t.strip()])
-        _render_external_context(query, inds)
+        _render_inflection_context(inds, query)
 
         # 신호가 하나도 없으면(모두 비인접/보합) 최신값만이라도 알려준다.
         if not movers:
