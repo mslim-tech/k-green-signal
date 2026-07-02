@@ -40,7 +40,7 @@ def test_signal_phase2_tabs_render(page: Page, base_url: str):
     _goto(page)
     page.get_by_role("button", name=re.compile(r"6\. 🚦 신호등")).click()
     expect(page.locator("[data-testid='step6-status']")).to_have_text("current", timeout=15000)
-    # 2단계 탭들: 판단 기준(범프)·인지 경로(히트맵)·구매 장벽(파레토)이 각각 그려진다.
+    # 2단계 탭들: 판단 기준(누적막대)·인지 경로(히트맵)·구매 장벽(파레토)이 각각 그려진다.
     page.get_by_role("tab", name=re.compile("판단 기준")).click()
     expect(page.get_by_text(re.compile("일관 라벨")).first).to_be_visible(timeout=15000)
     page.get_by_role("tab", name=re.compile("인지 경로")).click()

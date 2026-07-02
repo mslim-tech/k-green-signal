@@ -887,7 +887,7 @@ def _render_core_indicators(all_inds, threshold):
 
 
 # -----------------------------------------------------------------------------
-# 2단계 시각화: 순위(범프)·구성(히트맵)·우선순위(파레토)
+# 2단계 시각화: 구성(누적막대)·구성(히트맵)·우선순위(파레토)
 #   공통 원칙(추측 금지): 연도별로 라벨 표기가 흔들리는(드리프트) 항목이 많아,
 #   '여러 해에 걸쳐 같은 라벨로 잡힌 것'만 시계열 비교에 쓴다. 드물게 나온 라벨은
 #   잇지 않고 빼며(몇 개 뺐는지 캡션으로 밝힘), 단일연도 스냅샷(파레토)만 원본을 쓴다.
@@ -905,9 +905,9 @@ def _consistent_series(ind, max_items: int = 12):
     return kept[:max_items], years, dropped
 
 
-def _bump_chart(series_kept, years):
-    """ 범프 차트: 연도별로 값이 큰 순서(순위)를 이어 '순위 이동'을 보여준다.
-        값 자체가 아니라 '그 해 안에서 몇 위였나'라 다중응답(합>100%)에도 정직하다. """
+def _stacked_bar_chart(series_kept, years):
+    """ 누적막대: 연도(가로)별로 각 판단 기준의 응답률(%)을 색으로 쌓아 구성 변화를 본다.
+        다중응답이라 한 해 막대의 합은 100%를 넘을 수 있다(순위가 아닌 '구성' 비교용). """
     import altair as alt
     import pandas as pd
 
@@ -916,21 +916,18 @@ def _bump_chart(series_kept, years):
     if not recs:
         return None
     df = pd.DataFrame(recs)
-    df["rank"] = df.groupby("year")["val"].rank(method="min", ascending=False).astype(int)
-    n = int(df["rank"].max())
-    base = alt.Chart(df).encode(
-        # 도메인을 [n+0.5, 0.5] 로 직접 줘서 1위가 위, n위가 아래로 고르게 퍼지게 한다
-        # (zero 포함/reverse 자동도메인이 순위들을 위쪽에 뭉치게 하던 문제 방지).
+    # 값이 큰 항목이 아래에 쌓이도록(값 내림차순) 누적 순서를 고정한다.
+    chart = alt.Chart(df).mark_bar().encode(
         x=alt.X("year:O", title="연도"),
-        y=alt.Y("rank:Q", scale=alt.Scale(domain=[n + 0.5, 0.5], zero=False, nice=False),
-                axis=alt.Axis(format="d", tickMinStep=1, title="순위 (1 = 최상위)")),
+        y=alt.Y("val:Q", stack="zero",
+                title="응답률(%) — 다중응답이라 합>100% 가능"),
         color=alt.Color("label:N", title="항목",
                         legend=alt.Legend(orient="right", columns=1)),
-        detail="label:N",
+        order=alt.Order("val:Q", sort="descending"),
         tooltip=[alt.Tooltip("label:N", title="항목"), alt.Tooltip("year:O", title="연도"),
-                 alt.Tooltip("val:Q", title="값(%)"), alt.Tooltip("rank:Q", title="순위")],
+                 alt.Tooltip("val:Q", title="값(%)")],
     )
-    return base.mark_line(point=True, strokeWidth=3).properties(height=360)
+    return chart.properties(height=360)
 
 
 def _heatmap_chart(series_kept, years):
@@ -1055,24 +1052,22 @@ def _filter_inds(inds, terms):
 
 
 def _render_judgment_tab(all_inds):
-    """ '판단 기준' 탭: 친환경제품 판단 기준의 순위 이동(범프 차트). """
-    import altair as alt
-
-    st.caption("연도별로 어떤 판단 기준이 상위였는지(순위)를 이어 봅니다. "
-               "값이 아닌 '그 해의 순위'라 다중응답에도 정직합니다.")
+    """ '판단 기준' 탭: 친환경제품 판단 기준의 연도별 구성(누적막대). """
+    st.caption("연도별로 각 판단 기준의 응답률(%)을 색으로 쌓아 구성 변화를 봅니다. "
+               "다중응답이라 한 해 막대의 합은 100%를 넘을 수 있습니다.")
     cands = _inds_by_substr(all_inds, "판단기준")
     if not cands:
         st.info("판단 기준 시계열 데이터가 없습니다.")
         return
-    # 일관 라벨이 많은(=순위 비교가 잘 되는) 지표를 기본으로 위에 둔다.
+    # 일관 라벨이 많은(=구성 비교가 잘 되는) 지표를 기본으로 위에 둔다.
     cands.sort(key=lambda i: len(_consistent_series(i)[0]), reverse=True)
     choice = st.selectbox("지표", cands, format_func=lambda i: i.label, key="bump_pick")
     kept, years, dropped = _consistent_series(choice)
     if len(kept) < 2:
-        st.warning("이 지표는 연도별 라벨 표기가 일관되지 않아(드리프트) 순위 비교가 어렵습니다. "
+        st.warning("이 지표는 연도별 라벨 표기가 일관되지 않아(드리프트) 구성 비교가 어렵습니다. "
                    "다른 지표(예: 복수응답 버전)를 선택해 보세요.")
         return
-    chart = _bump_chart(kept, years)
+    chart = _stacked_bar_chart(kept, years)
     if chart is not None:
         st.altair_chart(chart, use_container_width=True)
     st.caption(f"📅 {years[0]}~{years[-1]} · 일관 라벨 {len(kept)}개로 비교"
