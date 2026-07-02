@@ -77,6 +77,9 @@ def load_rows() -> list[dict]:
     rows += corrections.confirmed_only_rows(rows)
     # 사람이 확정한 '같은 문항' 별칭으로 연도 간 std_id/라벨을 통일(시계열 연결).
     rows = std_aliases.apply_aliases(rows)
+    # 보고서가 명시한 '문항명 변경'을 옛 연도로 이어붙인다(예: 녹색제품 인지도 '19~22는
+    # 환경표지 마크 인지도). 과거 문항의 실제값을 계승하며 지어내지 않는다.
+    rows = std_aliases.backfill_series(rows)
     # 옛 연도에 없는 집계(예: 인지도)를 명시 정의대로 구성 보기 합으로 도출(시대 연결).
     rows = std_aliases.derive_aggregates(rows)
     return rows

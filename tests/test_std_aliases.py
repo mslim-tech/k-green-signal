@@ -149,6 +149,46 @@ def test_derive_skips_when_aggregate_exists():
                 if r["std_response_label"] == "인지"]) == 1
 
 
+def test_backfill_green_product_awareness_connects_eras():
+    # #3 녹색제품_인지도('23~): '19~22는 환경표지 마크 인지도로 연결(2023 보고서 그림 2-18).
+    #   '19~20 = '잘 알고 있다'(top1), '21~ = '잘+조금'(top2). 그림 2-18과 값 일치.
+    rows = [
+        {"std_id": "환경표지_인지도", "std_response_label": "잘 알고 있다",
+         "year": "2019", "value": "16.5", "unit": "%", "source": "s", "page_start": "96"},
+        {"std_id": "환경표지_인지도", "std_response_label": "조금 알고 있다",
+         "year": "2019", "value": "41.7", "unit": "%", "source": "s", "page_start": "96"},
+        {"std_id": "환경표지_인지도", "std_response_label": "잘 알고 있다",
+         "year": "2021", "value": "7.5", "unit": "%", "source": "s", "page_start": "96"},
+        {"std_id": "환경표지_인지도", "std_response_label": "조금 알고 있다",
+         "year": "2021", "value": "33.4", "unit": "%", "source": "s", "page_start": "96"},
+        # 대상에 이미 있는 '23은 백필하지 않는다(덮어쓰기 금지).
+        {"std_id": "녹색제품_인지도", "std_label": "녹색제품 인지도",
+         "std_response_label": "인지(잘 알고 있다+조금 알고 있다)",
+         "year": "2023", "value": "51.7", "unit": "%"},
+    ]
+    out = std_aliases.backfill_series(rows)
+    green = {r["year"]: r for r in out if r["std_id"] == "녹색제품_인지도"
+             and r["std_response_label"] == "인지(잘 알고 있다+조금 알고 있다)"}
+    assert green["2019"]["value"] == "16.5"       # top1: 잘만
+    assert green["2021"]["value"] == "40.9"       # top2: 7.5+33.4
+    assert green["2023"]["value"] == "51.7"       # 원래 있던 것 그대로(중복 없음)
+    assert len([r for r in out if r["std_id"] == "녹색제품_인지도"
+                and r["year"] == "2023"]) == 1
+    # 값 출처는 과거 문항 그대로 계승, 연결 근거는 warning 에 남는다.
+    assert green["2019"]["source"] == "s"
+    assert "그림 2-18" in green["2019"]["warning"]
+    # 필요한 보기가 없는 해(2020: 조금 없음... 여기선 2020 자체가 없음)는 만들지 않는다.
+    assert "2020" not in green and "2022" not in green
+
+
+def test_backfill_skips_when_component_missing():
+    # 보기가 다 없으면 백필하지 않는다(추측 금지).
+    rows = [{"std_id": "환경표지_인지도", "std_response_label": "잘 알고 있다",
+             "year": "2021", "value": "7.5", "unit": "%"}]   # '조금 알고 있다' 없음
+    out = std_aliases.backfill_series(rows)
+    assert not [r for r in out if r["std_id"] == "녹색제품_인지도" and r["year"] == "2021"]
+
+
 def test_untouched_rows_passthrough():
     rows = [{"std_id": "녹색제품_인지도", "std_label": "녹색제품 인지도",
              "std_response_label": "인지", "year": "2024", "value": "55.0", "unit": "%"}]

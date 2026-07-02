@@ -120,6 +120,80 @@ DERIVE_AGGREGATES: dict[str, dict] = {
 }
 
 
+# 교차-시계열 백필(사람 확정): 설문이 문항명을 바꿔 새 문항이 최근 연도부터만 있을 때,
+#   보고서가 "옛 연도는 다른(과거) 문항을 사용한다"고 명시한 경우에 한해 옛 연도를
+#   그 과거 문항의 특정 보기 합으로 채워 시계열을 잇는다. 값은 과거 문항의 실제 추출값이라
+#   지어내지 않으며, 근거(보고서 그림/표)를 명시한다. (from_std_id 는 원본 그대로 보존.)
+#
+#  #3 녹색제품_인지도: 문항은 '23년부터. 보고서(2023 그림 2-18, p.14)가 '19~'22년은
+#     '환경표지(마크) 인지도'를 쓴다고 명시. 단 '인지도' 정의가 해마다 달라('등간 상이',
+#     보고서 명시) '19~20년은 '잘 알고 있다'(top1), '21년부터 '잘+조금'(top2)이다.
+#     → 그 정의대로 환경표지_인지도 보기를 합쳐 채운다(값이 그림 2-18과 정확히 일치).
+SERIES_BACKFILL: dict[str, dict] = {
+    "녹색제품_인지도": {
+        "from_std_id": "환경표지_인지도",
+        "std_label": "녹색제품 인지도",
+        "category": "환경 인식",
+        "response_label": "인지(잘 알고 있다+조금 알고 있다)",  # 2023~25 라벨과 동일
+        "by_year": {
+            "2019": ["잘 알고 있다"],
+            "2020": ["잘 알고 있다"],
+            "2021": ["잘 알고 있다", "조금 알고 있다"],
+            "2022": ["잘 알고 있다", "조금 알고 있다"],
+        },
+        "note": ("녹색제품 인지도 시계열 연결: '19~'22는 환경표지(마크) 인지도 사용"
+                 "(2023 보고서 그림 2-18, p.14). 인지도 정의 상이('19~20=잘 알고 있다, "
+                 "'21~=잘+조금)."),
+    },
+}
+
+
+def backfill_series(rows: list[dict]) -> list[dict]:
+    """ SERIES_BACKFILL 설정대로 옛 연도 행을 과거 문항 보기 합으로 만들어 잇는다.
+        - 대상(std_id)에 그 연도가 이미 있으면 건너뛴다(덮어쓰지 않음).
+        - 필요한 보기가 그 해에 다 없으면 만들지 않는다(추측 금지).
+        - 값 출처(source/page)는 과거 문항의 실제 행을 그대로 계승하고, 연결 근거는 warning 에 남긴다. """
+    if not SERIES_BACKFILL:
+        return rows
+    # (from_std_id, year, 응답라벨) → (값, 표본행)
+    comp: dict[tuple, tuple] = {}
+    have_target: set[tuple] = set()   # (target_std_id, year) 이미 있는 것
+    for r in rows:
+        sid = (r.get("std_id") or "").strip()
+        yr = (r.get("year") or "").strip()
+        if sid in SERIES_BACKFILL:
+            have_target.add((sid, yr))
+        lbl = (r.get("std_response_label") or "").strip()
+        try:
+            val = float((r.get("value") or "").strip())
+        except (TypeError, ValueError):
+            continue
+        comp[(sid, yr, lbl)] = (val, r)
+    added: list[dict] = []
+    for target, cfg in SERIES_BACKFILL.items():
+        src_id = cfg["from_std_id"]
+        for year, parts in cfg["by_year"].items():
+            if (target, year) in have_target:          # 이미 있음 → 건너뜀
+                continue
+            picked = [comp.get((src_id, year, p)) for p in parts]
+            if any(x is None for x in picked):          # 보기 하나라도 없으면 만들지 않음
+                continue
+            total = round(sum(v for v, _ in picked), 1)
+            sample = picked[0][1]
+            nr = dict(sample)
+            nr["std_id"] = target
+            nr["std_label"] = cfg["std_label"]
+            nr["category"] = cfg["category"]
+            nr["response_label"] = cfg["response_label"]
+            nr["std_response_label"] = cfg["response_label"]
+            nr["value"] = str(total)
+            note = cfg.get("note", "")
+            prev = (nr.get("warning") or "").strip()
+            nr["warning"] = f"{prev} | {note}".strip(" |") if prev else note
+            added.append(nr)
+    return rows + added
+
+
 def derive_aggregates(rows: list[dict]) -> list[dict]:
     """ 설정된 std_id 에 대해, 연도별로 구성 보기 합을 도출 라벨 행으로 추가한다
         (이미 그 라벨이 있으면 건너뜀 — 최근 연도는 통일된 집계가 이미 있음). """
