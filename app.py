@@ -15,6 +15,7 @@
 
 import csv
 import io
+import json
 import logging
 import os
 import time
@@ -1023,6 +1024,38 @@ def _render_drivers_barriers(full_inds, terms):
             st.caption("비구매 이유 데이터 없음")
 
 
+_EXTERNAL_CONTEXT_PATH = Path(__file__).resolve().parent / "external_context.json"
+
+
+@st.cache_data
+def _load_external_context():
+    """ 큐레이션된 외부 맥락(뉴스) 항목. 파일 없거나 깨지면 빈 목록(기능만 비활성). """
+    try:
+        return json.loads(_EXTERNAL_CONTEXT_PATH.read_text(encoding="utf-8")).get("entries", [])
+    except Exception:
+        return []
+
+
+def _render_external_context(query, inds):
+    """ 외부 맥락(#6, 큐레이션): 검색어/관련 지표에 매칭되는 그해 사건을 '참고'로 인용 표시.
+        설문 통계와 별개의 출처(url) 있는 자료만 — 추측/자동생성 아님(WebSearch로 조사·인용). """
+    entries = _load_external_context()
+    if not entries:
+        return
+    hay = (query + " " + " ".join(f"{i.label} {i.std_id}" for i in inds)).lower()
+    hits = [e for e in entries if any(kw.lower() in hay for kw in e.get("match", []))]
+    if not hits:
+        return
+    hits.sort(key=lambda e: e.get("year", 0))
+    st.divider()
+    st.markdown("**🗞️ 외부 맥락 (참고 · 큐레이션)**")
+    st.caption("검색어와 관련된 그해 주요 정책·사회 사건입니다. 설문 통계와 별개의 인용 자료이며, "
+               "수치 변화의 원인을 단정하지 않습니다.")
+    for e in hits:
+        st.markdown(f"· **{e.get('year','')}** — {e.get('title','')}  \n"
+                    f"　[출처: {e.get('source','')}]({e.get('url','')})")
+
+
 def _render_query_summary(inds, threshold, query, ds_years, full_inds):
     """ 검색어 요약(결론 먼저): 근거 있는 signals 만으로 ①키워드 요약 ②상승/보합/하락 수
         ③최대 상승 Top3 ④최대 하락 Top3. '추측은 데이터가 아니다' — 하위집단/외부뉴스는 안 만든다. """
@@ -1063,6 +1096,7 @@ def _render_query_summary(inds, threshold, query, ds_years, full_inds):
 
         st.divider()
         _render_drivers_barriers(full_inds, [t for t in query.lower().split() if t.strip()])
+        _render_external_context(query, inds)
 
         # 신호가 하나도 없으면(모두 비인접/보합) 최신값만이라도 알려준다.
         if not movers:
