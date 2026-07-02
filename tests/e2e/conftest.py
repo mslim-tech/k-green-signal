@@ -83,6 +83,22 @@ def streamlit_server(server_log: Path):
     else:
         iso_outputs.mkdir(parents=True)
 
+    # 인제스트 스킵 캐시(pipeline.is_fresh)가 '전부 최신'으로 판정하도록 산출 mtime 을
+    # 파이프라인 순서대로 증가시켜 정규화한다. 실제 outputs/ 는 재통합 이력 때문에
+    # dedup(신규) > flagged/review(구) 로 mtime 이 어긋나 있어, 그대로 복제하면 flags 단계가
+    # stale 로 잡혀 인제스트 스킵 테스트가 실제 단계를 돌려 버린다(→ 미완료·상태오염으로
+    # 인제스트/스텝퍼 e2e 가 연쇄 실패). 격리 복제본만 손대며 실제 outputs 는 건드리지 않는다.
+    _chain = ["standardized_long.csv", "standardized_long.clean.csv",
+              "standardized_long.dedup.csv", "standardized_long.flagged.csv",
+              "review_queue.csv"]
+    _ordered = sorted(iso_outputs.glob("*.extracted.jsonl")) + \
+        [iso_outputs / n for n in _chain]
+    _base = time.time()
+    for _i, _p in enumerate(_ordered):
+        if _p.exists():
+            os.utime(_p, (_base + _i, _base + _i))   # 뒤 단계일수록 더 새롭게(입력 < 산출)
+    (iso_outputs / "ingest_state.json").unlink(missing_ok=True)   # 세션 시작은 깨끗하게
+
     env = {
         **os.environ,
         "PYTHONIOENCODING": "utf-8",
