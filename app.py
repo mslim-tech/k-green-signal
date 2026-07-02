@@ -892,17 +892,35 @@ def _render_core_indicators(all_inds, threshold):
 #   '여러 해에 걸쳐 같은 라벨로 잡힌 것'만 시계열 비교에 쓴다. 드물게 나온 라벨은
 #   잇지 않고 빼며(몇 개 뺐는지 캡션으로 밝힘), 단일연도 스냅샷(파레토)만 원본을 쓴다.
 # -----------------------------------------------------------------------------
-def _consistent_series(ind, max_items: int = 12):
-    """ 한 지표에서 '연도 대부분(전체-1년 이상)에 같은 라벨로 등장한' 시계열만 추린다.
+def _consistent_series(ind, max_items: int = 12, anchor: str = "span"):
+    """ 한 지표에서 '여러 해에 걸쳐 안정적으로 같은 라벨로 등장한' 시계열만 추린다.
+        anchor="span"(기본): 전체 연도폭 기준(전체-1년 이상 등장). 초기 드리프트 연도가 있으면
+          보수적으로 아무것도 안 남길 수 있다 — 인지 경로 히트맵처럼 가짜 연결을 강히 막을 때.
+        anchor="block": 기준을 '가장 넓게 잡힌 라벨의 연도 수'로 잡아, 초기 몇 해의 라벨 표기
+          드리프트(예: '…를 보고'→'…')가 최근 안정 구간의 연결을 끊지 않게 한다. 이때 표시
+          연도는 유지 라벨이 2개 이상 걸친 해만 남겨 외톨이 해(드리프트 1개만 남는 해)를 뺀다.
         반환: (시계열들, 표시연도들, 제외한 라벨 수). 라벨 드리프트로 인한 가짜 연결 방지. """
-    years = sorted({p.year for s in ind.series for p in s.points})
-    if len(years) < 2:
-        return [], years, len(ind.series)
-    need = max(2, len(years) - 1)
+    from collections import Counter
+
+    all_years = sorted({p.year for s in ind.series for p in s.points})
+    if len(all_years) < 2:
+        return [], all_years, len(ind.series)
+    cover = [len({p.year for p in s.points}) for s in ind.series]
+    if anchor == "block":
+        need = max(2, (max(cover) if cover else 0) - 1)
+    else:
+        need = max(2, len(all_years) - 1)
     kept = [s for s in ind.series if len({p.year for p in s.points}) >= need]
     kept.sort(key=lambda s: s.latest.value, reverse=True)
-    dropped = len(ind.series) - len(kept[:max_items])
-    return kept[:max_items], years, dropped
+    kept = kept[:max_items]
+    if anchor == "block":
+        # 유지 라벨이 2개 이상 걸친 해만(드리프트 라벨 하나만 남는 외톨이 해 제외).
+        yc = Counter(p.year for s in kept for p in s.points)
+        years = [y for y in all_years if yc[y] >= 2]
+    else:
+        years = all_years
+    dropped = len(ind.series) - len(kept)
+    return kept, years, dropped
 
 
 def _stacked_bar_chart(series_kept, years):
@@ -1059,10 +1077,11 @@ def _render_judgment_tab(all_inds):
     if not cands:
         st.info("판단 기준 시계열 데이터가 없습니다.")
         return
-    # 일관 라벨이 많은(=구성 비교가 잘 되는) 지표를 기본으로 위에 둔다.
-    cands.sort(key=lambda i: len(_consistent_series(i)[0]), reverse=True)
+    # 기본은 1순위(단일응답) 지표를 위에 두고(복수응답은 뒤로), 그다음 일관 라벨이 많은 순.
+    cands.sort(key=lambda i: ("복수응답" in i.std_id,
+                              -len(_consistent_series(i, anchor="block")[0])))
     choice = st.selectbox("지표", cands, format_func=lambda i: i.label, key="bump_pick")
-    kept, years, dropped = _consistent_series(choice)
+    kept, years, dropped = _consistent_series(choice, anchor="block")
     if len(kept) < 2:
         st.warning("이 지표는 연도별 라벨 표기가 일관되지 않아(드리프트) 구성 비교가 어렵습니다. "
                    "다른 지표(예: 복수응답 버전)를 선택해 보세요.")
