@@ -837,6 +837,18 @@ def _trend_altair(series_list):
     return chart
 
 
+# 지표별 비교 유의 경고(std_id → 캡션): 연도 간 척도·정의가 달라 시계열을 곧이곧대로
+# 비교하면 안 되는 지표에 표시한다. 데이터는 그대로 두고 '해석 유의'만 알린다.
+INDICATOR_CAVEATS: dict[str, str] = {
+    "녹색제품_인지도": (
+        "⚠️ 연도별 척도가 달라 비교 유의: '19~'22는 '환경표지(마크) 인지도', "
+        "'23은 4점척도의 '잘+조금'(=51.7%, '들어본 적 있다'는 제외), "
+        "'24~는 2점척도 '알고 있음'(=82.2%~). '23→'24 급등은 실제 증가가 아니라 "
+        "척도 변경 때문임(2023 보고서 그림 2-18 '등간 상이' 주석)."
+    ),
+}
+
+
 def _render_indicator_card(ind, threshold, max_series: int = 6):
     """ 한 지표(Indicator)를 카드로: 멀티라인 차트 + 응답별 최신값·신호 + 출처.
         라벨이 많으면 변화 큰 max_series 개만 차트에 그린다(compute_signals 가 정렬해 둠). """
@@ -845,6 +857,9 @@ def _render_indicator_card(ind, threshold, max_series: int = 6):
         st.markdown(f"**{ind.label}**")
         if ind.summary:
             st.caption(ind.summary)
+        caveat = INDICATOR_CAVEATS.get(ind.std_id)
+        if caveat:
+            st.caption(caveat)
         chart = _trend_altair(top_series)
         if chart is not None:
             st.altair_chart(chart, use_container_width=True)
