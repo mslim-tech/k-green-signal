@@ -11,7 +11,10 @@
 #
 # 채점(질문별, 모두 통과해야 PASS):
 #   1) grounding   : 검색 결과에 기대 연도 + 기대 출처(파일) 청크가 있는가
+#                    (mode=advise 케이스처럼 year/source 를 지정하지 않으면 다년
+#                     다면 검색이라 이 기준은 건너뛴다)
 #   2) answer_has  : 답변에 기대 항목/수치 문자열이 모두 포함되는가
+#                    (advise 케이스는 KEEP/ADD/DROP/FIX 헤딩·척도 경고 등 계약을 단언)
 #   3) head_lacks  : 답변 첫 줄(1위 문장)에 집계·비응답 항목('기타'·'없음')이 없는가
 #
 # 전제: outputs/chroma 인덱스 + .env 의 OPENAI_API_KEY (실제 LLM 호출).
@@ -41,21 +44,23 @@ def grade_one(case: dict) -> dict:
     """ 한 질문을 실제로 답하게 하고 3개 기준으로 채점한다. 실패 사유도 모아 돌려준다. """
     from rag.retrieval.answer import answer
 
-    res = answer(case["q"], k=5)
+    res = answer(case["q"], k=5, mode=case.get("mode", "cite"))
     text = res.text or ""
     head = text.split("\n", 1)[0]
     fails: list[str] = []
 
-    # 1) grounding: 기대 연도 + 기대 출처 청크가 검색됐는가
-    grounded = any(
-        str(h.metadata.get("year")) == case["year"]
-        and case["source"] in str(h.metadata.get("source", ""))
-        for h in res.hits
-    )
-    if not grounded:
-        got = {(str(h.metadata.get("year")), str(h.metadata.get("source", "")))
-               for h in res.hits}
-        fails.append(f"grounding: {case['year']}/{case['source']} 미검색 (검색됨: {got})")
+    # 1) grounding: 기대 연도 + 기대 출처 청크가 검색됐는가.
+    #    advise 케이스처럼 year/source 미지정이면 다년 다면 검색이라 건너뛴다.
+    if case.get("year") and case.get("source"):
+        grounded = any(
+            str(h.metadata.get("year")) == case["year"]
+            and case["source"] in str(h.metadata.get("source", ""))
+            for h in res.hits
+        )
+        if not grounded:
+            got = {(str(h.metadata.get("year")), str(h.metadata.get("source", "")))
+                   for h in res.hits}
+            fails.append(f"grounding: {case['year']}/{case['source']} 미검색 (검색됨: {got})")
 
     # 2) answer_has: 기대 항목/수치가 모두 답변에 있는가
     for term in case.get("answer_has", []):

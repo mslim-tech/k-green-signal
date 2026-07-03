@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-07-03 (2) — UX/UI 개편 "결과 먼저, 관리 나중"
+
+사용자 요청: "전체 코드베이스를 보고 시스템이 사용자 의도에 맞게 동작하도록, 더 나은 UX/UI로 개편"(계획 승인 후 4커밋 단계 진행).
+
+### 요청 → 대응 요약
+
+| # | 문제(의도 위반/마찰) | 대응 / 결과 |
+|---|---|---|
+| 1 | 앱 재인덱싱 시 advise 근거(지식청크 22개) 조용히 소실 | `ui/index.py`가 CLI 와 동일한 `build_all_chunks()`(사실+방법론+외부맥락) 사용 |
+| 2 | 앱에 버튼 있는 작업을 "CLI 가서 실행" 안내(막다른 길) 2곳 · 연도 필터 하드코딩 · 검수큐 캐시 미무효화 · LLM 검증(과금) 키 게이트 밖+새로고침 시 이중 과금 | 앱 내 단계 안내로 교체 · `signals.dataset_years` 동적 파생 · mtime 캐시 키 · 키 게이트+pid 영속화 복구(`adjudicate_state.json`) |
+| 3 | 신호등(키·인덱스 불필요한 최종 성과물)이 6단계 맨 뒤 — "클론 즉시 신호등"과 상충 | **3모드 IA**: 🚦 대시보드(정형 CSV 있으면 랜딩) · 💬 질의 · 🛠 데이터 준비(1~4단계 게이트 스텝퍼 유지). 제언 점프는 mode 전환으로 |
+| 4 | 검수: 행마다 선택→라디오(기본값 '값 고침'=변조성)→저장 반복, 원문 PDF 는 앱 밖 | **순차 검수 모드**(저장→자동 다음 행) + **원문 페이지 미리보기**(extract_vision 렌더러 재사용·dpi150·캐시, PDF 없으면 폴백) + 안전 기본값 '원래 값 맞음' + 행 키 위젯 키(입력 잔류 방지) |
+| 5 | advise 답변(KEEP/ADD/DROP/FIX)이 통짜 마크다운, 출처 클릭 불가 | 프롬프트 **헤딩 계약** + `parse_advise_sections`(합성 금지·실패 시 원문 폴백) → 갈래별 배지 카드. 출처는 카드(연도·std_id 배지·유사도)+**온디맨드 원문 페이지 토글**(PDF 있을 때만) |
+| 6 | RAG·검수 E2E 부재, eval 은 cite 6케이스뿐 | E2E +3(출처 카드 폴백·advise 구조화·순차 검수), 파서 단위 3, eval advise 골드 3(척도 FIX·인과 고지) + `run_eval.py` mode 지원. **단위 56 + E2E 21 = 77 passed** |
+
+커밋: `fix(app): align in-app actions with pipeline intent` → `feat(app): promote signal dashboard to landing with 3-mode IA` → `feat(review): sequential review mode with source-page preview` → `feat(rag): structured advise rendering and source cards`.
+
+---
+
 ## 2026-07-03
 
 방법론 지식 인덱싱 + '데이터 기반 제언' 모드 + 신호등 의사결정 프레이밍 세션. 척도 변경(예: 인지도 2023 4점→2024~ 2점) 아티팩트를 실제 추세로 오독하던 문제를 데이터·지식·UI 세 층에서 해소하고, `app.py`를 `ui/` 패키지로 분리 착수.

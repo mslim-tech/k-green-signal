@@ -57,13 +57,16 @@ ADVISE_SYSTEM_PROMPT = (
     "너는 '친환경 소비 인지도 조사'(2023~2025 정형 데이터)에 근거해 '데이터 기반 제언'을 "
     "하는 분석가다.\n"
     "규칙(반드시 지켜라):\n"
-    "1. 결론을 먼저 쓴다. '💡 제언(추론)'을 맨 위에 두고, 그 아래에 '📊 근거 사실'을 둔다.\n"
+    "1. 결론을 먼저 쓴다. 정확히 `### 💡 제언(추론)` 헤딩을 맨 위에 두고, 그 아래에 "
+    "정확히 `### 📊 근거 사실` 헤딩을 둔다(헤딩 표기를 바꾸지 마라 — 화면이 이 헤딩으로 구조화한다).\n"
     "   '💡 제언(추론)' — 아래 KEEP/ADD/DROP/FIX 네 갈래. 각 제언 끝에 근거가 된 [출처]를 붙인다.\n"
     "   '📊 근거 사실' — 위 제언이 인용한 수치·추세를 [근거]에서 뽑아 하단에 정리. 각 항목 끝에 [출처].\n"
     "2. 출처 표기: [근거] 자료 머리에 적힌 '실제 파일명'을 그대로 써라. '파일' 같은 자리표시자를 "
     "그대로 쓰지 마라. 예: [출처: 2025년 친환경생활·소비 국민 인지도 조사 결과보고서.pdf p.31-32]. "
     "페이지가 없는 자료(방법론 주석 등)는 파일명만: [출처: 방법론 주석(큐레이션)].\n"
-    "3. 제언은 반드시 다음 네 갈래를 각각 채운다(해당 없으면 '데이터로 판단 불가'라고 명시):\n"
+    "3. 제언은 반드시 다음 네 갈래를 각각 **정확히 이 헤딩으로** 채운다: `#### KEEP(유지)` "
+    "`#### ADD(신설)` `#### DROP/축소` `#### FIX(설계 교정)` "
+    "(해당 없으면 그 헤딩 아래 '데이터로 판단 불가'라고 명시):\n"
     "   · KEEP(유지) — 2개 연도 이상에서 추세가 뚜렷하거나 꾸준히 높은 문항만. "
     "1개 연도만 있으면 KEEP이 아니라 '관찰 필요(단일 연도)'로 분류하라.\n"
     "   · ADD(신설) — 데이터에 공백이 보여 새로 물어야 할 것(단, 근거로 공백을 지목).\n"
@@ -164,6 +167,48 @@ class Answer:
     rewritten: str = ""   # 6.4 재작성된 검색어(재작성을 쓴 경우만). 화면 투명성용.
 
 
+# --- advise 답변 구조 파싱(화면 구조화 렌더용) --------------------------------
+# 프롬프트가 강제한 헤딩(### 💡 제언 / #### KEEP… / ### 📊 근거 사실)대로 나눠 돌려줄 뿐,
+# LLM 이 쓰지 않은 구조를 합성하지 않는다("추측은 데이터가 아니다").
+# 파싱이 어긋나면 None → 화면은 원문 마크다운을 그대로 보여준다(필수 폴백).
+
+_ADVISE_KINDS = ("KEEP", "ADD", "DROP", "FIX")
+
+
+@dataclass
+class AdviseSections:
+    preamble: str                        # 첫 헤딩 이전 텍스트(있으면 그대로 보여준다)
+    advice: list[tuple[str, str, str]]   # (종류 KEEP/ADD/DROP/FIX, 헤딩 원문, 본문)
+    facts: str                           # '근거 사실' 본문("" 가능)
+
+
+def parse_advise_sections(text: str) -> AdviseSections | None:
+    """ advise 답변을 헤딩 단위로 나눈다. 제언 갈래가 2개 미만이면 None(원문 폴백). """
+    # (종류, 헤딩 원문, 본문 줄들) — 종류: PRE(서문)/SKIP(컨테이너 헤딩)/KEEP…/FACTS
+    sections: list[tuple[str, str, list[str]]] = [("PRE", "", [])]
+    for ln in (text or "").splitlines():
+        m = re.match(r"^\s{0,3}#{2,4}\s*(.+)$", ln)
+        if m:
+            head = m.group(1).strip()
+            kind = next((kd for kd in _ADVISE_KINDS if kd in head.upper()), None)
+            if kind is None and "근거 사실" in head:
+                kind = "FACTS"
+            if kind is None and "제언" in head:
+                kind = "SKIP"   # '### 💡 제언(추론)' 자체는 갈래를 담는 컨테이너 헤딩
+            if kind:
+                sections.append((kind, head, []))
+                continue
+        sections[-1][2].append(ln)
+    advice = [(kd, head, "\n".join(body).strip())
+              for kd, head, body in sections if kd in _ADVISE_KINDS]
+    if len(advice) < 2:
+        return None
+    facts = "\n\n".join("\n".join(body).strip()
+                        for kd, _, body in sections if kd == "FACTS").strip()
+    preamble = "\n".join(sections[0][2]).strip()
+    return AdviseSections(preamble=preamble, advice=advice, facts=facts)
+
+
 def _merge_hits(*groups: list[Hit]) -> list[Hit]:
     """ 여러 검색 결과를 chunk_id 기준 중복 제거하며 순서대로 합친다(먼저 온 것 우선). """
     seen: set[str] = set()
@@ -217,10 +262,29 @@ def answer(query: str, k: int = 5, year: str | None = None, mode: str = "cite",
 
     # 테스트/검증 모드: 실제 임베딩·LLM 없이 결정적 스텁(무료·빠름). 인용 형식 유지.
     if os.getenv("RAG_FAKE_LLM"):
-        return Answer(
-            text="(테스트 답변) 예시 인지율은 85.2% 입니다. [출처: sample p.1]",
-            hits=[], timings={"retrieval": 0.0, "generate": 0.0, "total": 0.0},
+        # 출처 카드 UI 까지 검증할 수 있게 가짜 근거 1건을 함께 돌려준다.
+        # source 는 어디에도 없는 파일명(sample.pdf) — '원문 페이지' 폴백 경로가 결정적.
+        fake_hit = Hit(
+            chunk_id="fake-1",
+            text="(테스트 근거) 예시 지표 인지율 85.2% — 스텁 청크.",
+            metadata={"year": "2025", "std_id": "예시_지표",
+                      "source": "sample.pdf", "page": "1"},
+            score=0.99,
         )
+        if mode == "advise":
+            # 프롬프트의 헤딩 계약과 같은 형식 — 구조화 렌더 경로를 E2E 로 검증 가능하게.
+            stub = (
+                "### 💡 제언(추론)\n"
+                "#### KEEP(유지)\n- (테스트) 예시 지표는 추세가 뚜렷해 유지. [출처: sample.pdf p.1]\n"
+                "#### ADD(신설)\n- (테스트) 데이터 공백 주제를 신설. [출처: sample.pdf p.1]\n"
+                "#### DROP/축소\n- (테스트) 변별력 낮은 문항 축소. [출처: sample.pdf p.1]\n"
+                "#### FIX(설계 교정)\n- (테스트) 척도 표준화 필요. [출처: 방법론 주석(큐레이션)]\n"
+                "### 📊 근거 사실\n- (테스트) 예시 인지율 85.2%. [출처: sample.pdf p.1]\n"
+            )
+        else:
+            stub = "(테스트 답변) 예시 인지율은 85.2% 입니다. [출처: sample p.1]"
+        return Answer(text=stub, hits=[fake_hit],
+                      timings={"retrieval": 0.0, "generate": 0.0, "total": 0.0})
 
     # 호출자가 연도를 지정하지 않았으면 질문에서 자동 감지(단일 연도일 때만).
     if year is None:
@@ -257,8 +321,10 @@ def answer(query: str, k: int = 5, year: str | None = None, mode: str = "cite",
     client = get_client()
     if mode == "advise":
         system = ADVISE_SYSTEM_PROMPT
-        instruct = ("'💡 제언(추론)'(KEEP/ADD/DROP/FIX)을 먼저 쓰고, 그 아래 '📊 근거 사실'을 "
-                    "정리해라. 출처는 [근거] 머리의 실제 파일명을 그대로 인용하고 '파일' 같은 "
+        instruct = ("`### 💡 제언(추론)` 헤딩 아래 `#### KEEP(유지)`/`#### ADD(신설)`/"
+                    "`#### DROP/축소`/`#### FIX(설계 교정)` 헤딩으로 제언을 먼저 쓰고, "
+                    "그 아래 `### 📊 근거 사실` 헤딩으로 근거를 정리해라(헤딩 표기 변경 금지). "
+                    "출처는 [근거] 머리의 실제 파일명을 그대로 인용하고 '파일' 같은 "
                     "자리표시자를 쓰지 마라. 근거 없는 제언은 하지 마라.")
     else:
         system = SYSTEM_PROMPT

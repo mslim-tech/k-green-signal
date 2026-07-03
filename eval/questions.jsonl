@@ -4,3 +4,6 @@
 {"id": "2024-env-concern", "q": "2024년 환경문제에 대한 관심도는?", "year": "2024", "source": "2024년 친환경", "answer_has": ["96.4"], "head_lacks": [], "truth": "관심 있음 96.4% (p.37-38)"}
 {"id": "2024-greencard-awareness", "q": "2024년 그린카드 인지도는?", "year": "2024", "source": "2024년 친환경", "answer_has": ["62.6"], "head_lacks": [], "truth": "알고 있다 62.6% (p.107-108)"}
 {"id": "2025-expand-top", "q": "2025년에 확대되길 바라는 환경표지 인증제품 1위는?", "year": "2025", "source": "2025년 친환경", "answer_has": ["위생용품"], "head_lacks": ["기타", "없음"], "truth": "개인 위생용품 55.2% (p.41-42)"}
+{"id": "advise-2026-design", "q": "3개년 추세로 보아 2026 인지도 설문은 어떻게 설계하면 좋을까?", "mode": "advise", "answer_has": ["KEEP", "ADD", "DROP", "FIX"], "head_lacks": [], "truth": "KEEP/ADD/DROP/FIX 네 갈래 헤딩 계약 + 근거 사실 분리 (ADVISE_SYSTEM_PROMPT 규칙 1·3)"}
+{"id": "advise-scale-change", "q": "녹색제품 인지도가 2023년에서 2024년으로 급등한 것을 어떻게 해석해야 할까?", "mode": "advise", "answer_has": ["FIX", "척도"], "head_lacks": [], "truth": "'23 4점척도 51.7% → '24 2점척도 82.2% — 척도 변경 아티팩트라 실제 추세 아님, FIX(척도 표준화) 대상 (curation/methodology_notes.json 녹색제품_인지도)"}
+{"id": "advise-greenwashing-context", "q": "친환경 표시·광고에 대한 신뢰 변화는 어떤 맥락에서 봐야 할까?", "mode": "advise", "answer_has": ["인과"], "head_lacks": [], "truth": "그린워싱 적발 급증·가이드라인 발간 등 외부 맥락과 대조하되 '상관·맥락일 뿐 인과 아님' 고지 (curation/external_context.json, ADVISE_SYSTEM_PROMPT 규칙 6)"}

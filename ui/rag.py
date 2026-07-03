@@ -5,7 +5,11 @@
 # -----------------------------------------------------------------------------
 from __future__ import annotations
 
+import re
+
 import streamlit as st
+
+from ui.common import DATA_DIR
 
 
 # 6.7 예시 질문 — 세션당 1회만 생성해 캐시(매 rerun LLM 재호출 방지). 실데이터 기반.
@@ -13,6 +17,53 @@ import streamlit as st
 def _cached_examples() -> list[str]:
     from rag.retrieval.answer import suggest_questions
     return suggest_questions(4)
+
+
+def _first_page(page_str: str) -> int | None:
+    """ '103-105' 같은 페이지 표기에서 첫 페이지 번호만 뽑는다(없으면 None). """
+    m = re.match(r"\s*(\d+)", page_str or "")
+    return int(m.group(1)) if m else None
+
+
+# 원문 페이지 미리보기(온디맨드) — extract_vision 렌더러 재사용, (source, page) 단위 캐시.
+@st.cache_data(show_spinner=False, max_entries=32)
+def _page_png(source: str, page: int, dpi: int = 120) -> bytes | None:
+    """ 원문 PDF 페이지를 PNG 로 렌더링. PDF 가 없으면 None(샘플 클론엔 PDF 없음). """
+    from rag.ingest.extract_vision import render_page_images, _resolve_pdf
+    try:
+        pdf = _resolve_pdf(source)
+    except FileNotFoundError:
+        return None
+    imgs = render_page_images(pdf, page, page, dpi=dpi)
+    return imgs[0] if imgs else None
+
+
+# advise 갈래별 배지(색)와 한 줄 요지 — 내용은 LLM 원문 그대로, 표시만 카드로 구조화.
+_ADVISE_BADGE = {
+    "KEEP": (":green-badge[KEEP · 유지]", "추세가 뚜렷해 유지할 문항"),
+    "ADD":  (":blue-badge[ADD · 신설]", "데이터 공백 — 새로 물을 것"),
+    "DROP": (":red-badge[DROP · 축소]", "변별력 낮음 — 줄이거나 뺄 것"),
+    "FIX":  (":violet-badge[FIX · 설계 교정]", "척도·정의 표준화 대상"),
+}
+
+
+def _render_advise(sections) -> None:
+    """ advise 답변(파싱 성공분)을 갈래별 카드로 보여준다 — 분할만 하고 내용은 원문 그대로. """
+    if sections.preamble:
+        st.markdown(sections.preamble)
+    # 존재하는 갈래만 배지 요약 행(한눈에 어떤 제언이 있는지)
+    st.markdown(" ".join(_ADVISE_BADGE[k][0] for k, _, _ in sections.advice
+                         if k in _ADVISE_BADGE))
+    for kind, _head, body in sections.advice:
+        badge, hint = _ADVISE_BADGE.get(kind, ("", ""))
+        with st.container(border=True):
+            st.markdown(badge)
+            if hint:
+                st.caption(hint)
+            st.markdown(body or "_(데이터로 판단 불가)_")
+    if sections.facts:
+        with st.expander("📊 근거 사실 보기", expanded=False):
+            st.markdown(sections.facts)
 
 
 # -----------------------------------------------------------------------------
@@ -96,7 +147,18 @@ def render_rag_tab(gate=None):
 
     if result.rewritten:
         st.caption(f"🔎 검색어 재작성: _{result.rewritten}_")
-    st.markdown(result.text)
+
+    # advise 모드는 헤딩 계약(#### KEEP…)이 지켜졌을 때만 갈래별 카드로 구조화한다.
+    # 파싱이 어긋나면 원문 마크다운 그대로 — LLM 이 안 쓴 구조를 합성하지 않는다.
+    rendered = False
+    if mode == "advise":
+        from rag.retrieval.answer import parse_advise_sections
+        sections = parse_advise_sections(result.text)
+        if sections is not None:
+            _render_advise(sections)
+            rendered = True
+    if not rendered:
+        st.markdown(result.text)
 
     # 왜 느린지 가시화 — 단계별 소요시간(검색 vs 답변 생성)
     tm = result.timings or {}
@@ -107,8 +169,18 @@ def render_rag_tab(gate=None):
 
     with st.expander(f"📎 근거 출처 {len(result.hits)}건 보기"):
         for i, h in enumerate(result.hits, start=1):
-            st.markdown(
-                f"**[{i}]** {h.metadata.get('year')}년 · `{h.metadata.get('std_id')}` "
-                f"— {h.locator} (유사도 {h.score})"
-            )
-            st.caption(h.text.replace("\n", " ")[:200] + " ...")
+            with st.container(border=True):
+                st.markdown(
+                    f"**[{i}]** :blue-badge[{h.metadata.get('year', '?')}년] "
+                    f":gray-badge[{h.metadata.get('std_id', '')}] — **{h.locator}**"
+                )
+                st.caption(f"유사도 {h.score} · " + h.text.replace("\n", " ")[:200] + " ...")
+                # 원문 페이지 미리보기 — PDF 가 실제로 있고 페이지 번호가 있을 때만 토글 노출
+                # (없는데 보여주면 죽은 UI). 켰을 때만 렌더(온디맨드 + 캐시)해 비용 0에 가깝게.
+                src = h.metadata.get("source", "")
+                page_no = _first_page(h.metadata.get("page", ""))
+                if src and page_no and (DATA_DIR / src).exists():
+                    if st.toggle("📄 원문 페이지 보기", key=f"rag_src_pg_{h.chunk_id}"):
+                        png = _page_png(src, page_no)
+                        if png:
+                            st.image(png, width="stretch", caption=f"{src} p.{page_no}")

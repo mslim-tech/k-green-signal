@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 uv sync                                    # 의존성 설치
-uv run streamlit run app.py                # 앱 실행(가이드 스텝퍼)
+uv run streamlit run app.py                # 앱 실행(🚦 대시보드 랜딩 + 질의/데이터 준비 3모드)
 
 # 테스트 — 기본은 'not slow'(빠르고 결정적, LLM 미호출)만 돈다(pyproject addopts)
 uv run pytest                              # 전체(단위 + E2E, slow 제외)
@@ -29,9 +29,12 @@ uv run python -m rag.ingest.extract "data/<파일>.pdf" 999 --save # 2 추출
 uv run python -m rag.transform.standardize                          # 3 표준화
 uv run python -m rag.transform.refine && uv run python -m rag.transform.dedup \
   && uv run python -m rag.transform.flags && uv run python -m rag.transform.review   # 4 정제·검수큐
+uv run python -m rag.curate.adjudicate 50                        # 5 하이브리드 자동확정(LLM 비전 재판독 → corrections.jsonl)
 uv run python -m rag.curate.validate                             # 인덱싱 준비 게이트(차단 항목 표시)
 uv run python -m rag.retrieval.chunking && uv run python -m rag.retrieval.index     # 6 청킹·Chroma 인덱싱
 ```
+
+옛 연도 백필·빵구 보정은 별도 CLI: `python -m rag.ingest.extract_vision_oldtable` → `rag.curate.integrate_oldyears`(map 후 apply) · `rag.curate.refill_vision`.
 
 ### 실행 환경변수(env)
 - `OPENAI_API_KEY` — `.env`에서만 읽는다(코드/문서에 직접 쓰지 않음).
@@ -57,16 +60,32 @@ data/*.pdf
   → dedup.py             중복 제거/과잉병합 분리 → standardized_long.dedup.csv
   → flags.py             의심값 자동 플래그(급변/서술정합/합계100) → standardized_long.flagged.csv
   → review.py            저신뢰·플래그 행 → review_queue.csv
-  → [사람 검수] app.py + corrections.py → corrections.jsonl (확정값 오버레이)
+  → adjudicate.py         하이브리드 게이트의 '자동 확정' 절반: 불확실 행을 LLM 이 원문
+                          페이지를 비전으로 독립 재판독해 대조 → agree/correct 만
+                          corrections.jsonl(status=llm_verified)로 확정, uncertain 은 사람에게
+  → [사람 검수] app.py + ui/review.py + corrections.py → corrections.jsonl (확정값 오버레이)
   → validate.py          준비 게이트: 빈/미확정/미검수면 인덱싱 차단
-  → chunking.py          A(문항-서술)·B(정형-사실) 청크 + 출처메타 → chunks.jsonl
+  → chunking.py          A(문항-서술)·B(정형-사실) + 지식청크(methodology·external_context)
+                          + 출처메타 → chunks.jsonl
   → index.py             임베딩 → Chroma(outputs/chroma/)
-  → retriever.py → answer.py   벡터검색 → LLM rerank → 출처 인용 답변
+  → retriever.py → answer.py   벡터검색 → LLM rerank → 출처 인용 답변(질의·advise 모드)
 ```
+
+**옛 연도(2018~2022) 백필 — 증분만:** 옛 보고서는 값이 [그림]·[표]에 있어 텍스트 추출이 0개다.
+`extract_vision_oldtable.py`(교차분석 표의 '전체' 연도행 비전 판독) → `integrate_oldyears.py`가
+**기존 std_id 사전을 시드로 고정**하고 새 연도만 증분 통합한다(standardize.py 전체 재실행 금지 —
+std_id 가 비결정적으로 바뀌어 corrections·routing·eval·테스트가 전부 깨진다). `refill_vision.py`는
+표 추출이 실패한 '빵구' 블록을 비전으로 다시 읽어 값만 보정한다(std_id·표준라벨은 불변).
+
+**큐레이션된 지식(데이터 아님):** `curation/methodology_notes.json`(척도 변경 등 비교 유의)과
+`curation/external_context.json`(그해 사건)은 사람 확정 '해석 지식'이다. `rag/curate/methodology.py`·
+`external_context.py`가 단일 로더로 공급 → 청킹이 `parser_type`으로 데이터와 구분해 인덱싱하고,
+앱 캡션·패널도 같은 파일을 읽는다(드리프트 방지). advise 모드가 데이터 변화를 사건과 대조해
+상황 적응형 해석을 만들되 인과는 단정하지 않는다.
 
 **두 개의 흐름 — 이 프로젝트의 중심 불변식:**
 - **실선(확정 데이터)**: 충실히 추출된 사실값만 정형 CSV로 흐른다.
-- **점선(추측 격리)**: 비전 불일치·저신뢰·플래그는 데이터가 아니라 **검토 큐**(`vision_candidates.csv`·`review_queue.csv`)로 간다. 사람이 원문을 보고 `corrections.jsonl`로 확정한 것만 실선에 오버레이된다. → 새 코드가 휴리스틱/LLM 판단을 정형 CSV에 직접 쓰면 원칙 위반이다.
+- **점선(추측 격리)**: 비전 불일치·저신뢰·플래그는 데이터가 아니라 **검토 큐**(`vision_candidates.csv`·`review_queue.csv`)로 간다. `corrections.jsonl`로 확정한 것만 실선에 오버레이된다. 확정 경로는 둘 — **사람 검수**, 그리고 **LLM 검증(adjudicate.py)**: 원문을 비전으로 재판독해 지지/불일치가 명확한 것만 `status=llm_verified`로 확정하고 uncertain 은 사람에게 넘긴다(canonical CSV 는 어느 쪽도 건드리지 않고, 이후 사람 재검수의 최신 레코드가 이긴다). → 하지만 새 코드가 휴리스틱/LLM '판단'을 정형 CSV에 직접 쓰면 여전히 원칙 위반이다(확정은 오직 corrections.jsonl 경유).
 
 **신호등 레이어**: `signals.py`는 LLM 없는 순수 함수 — 정형 사실 행을 (문항, 응답라벨)별 연도 시계열로 묶어 최신 YoY(%p)로 🟢상승/🟡보합/🔴하락 신호를 매긴다(색은 가치판단 아닌 방향만, 추정/보간 없음).
 
@@ -75,7 +94,7 @@ data/*.pdf
 - 산출물 경로는 `rag/core/paths.py`의 `OUTPUT_DIR`(env override).
 - 각 `rag/*.py`는 `from rag.x import ...`(패키지) / `from x import ...`(직접 실행) 이중 import를 try/except로 지원 — 새 모듈도 이 패턴을 따른다.
 
-**앱 오케스트레이션**: `app.py`(가이드 스텝퍼: 업로드→인제스트→검수→인덱싱→질의 + 🩺 시스템 로그)는 긴 LLM 단계를 `rag/pipeline.py`로 **서브프로세스** 실행해 Streamlit을 막지 않고 로그를 단계별 캡처한다(Popen은 `st.session_state`에 보관).
+**앱 오케스트레이션**: `app.py`는 3모드 — 🚦 대시보드(정형 CSV가 있으면 랜딩, 키·인덱스 불필요) · 💬 질의(Q&A) · 🛠 데이터 준비(업로드→인제스트→검수→인덱싱 4단계 게이트 스텝퍼) + 🩺 시스템 로그. 긴 LLM 단계는 `rag/pipeline.py`로 **서브프로세스** 실행해 Streamlit을 막지 않고 로그를 단계별 캡처한다(Popen은 `st.session_state`에 보관, 새로고침 복구는 pid 영속화).
 
 ---
 
@@ -109,10 +128,10 @@ LLM 보조의 흔한 실수(불필요한 변경·과설계·뒤늦은 질문)를
 - 외부에 푸시하기 전 비밀·원본 데이터 노출 여부를 점검한다.
 
 ## 프로젝트 구조
-- Streamlit 앱 진입점은 `app.py`로 둔다. (현재: 가이드 스텝퍼 — 업로드→인제스트→검수→인덱싱→질의)
-- 처음에는 `app.py` 하나로 시작하되, 기능이 늘면 기능별 파일로 분리한다.
+- Streamlit 앱 진입점은 `app.py`(3모드 — 🚦 대시보드 랜딩 · 💬 질의 · 🛠 데이터 준비 4단계 스텝퍼)이고, 각 화면은 `ui/`로 분리돼 있다(`ui/ingest.py`·`review.py`·`index.py`·`signal.py`·`rag.py`, 공용은 `ui/common.py`). 새 화면은 `ui/`에 파일로 추가하고 `app.py`에서 `render_*`를 호출한다.
+- `rag/`는 서브패키지로 나뉜다: `ingest/`(파싱·추출·비전) · `transform/`(표준화·정제·플래그) · `curate/`(검수·LLM검증·지식로더·백필) · `retrieval/`(청킹·인덱싱·검색·답변) · `core/`(config·paths·logging). 서브프로세스 러너는 `rag/pipeline.py`.
 - 문서 진단 `rag/ingest/ingestion.py` · Chunking `rag/retrieval/chunking.py` · Vector DB `rag/retrieval/index.py` · 검색 `rag/retrieval/retriever.py`.
-- 결과 파일이 필요해지는 시점에 `outputs/`, 평가 질문은 `eval/`, 샘플/원본 문서는 `data/`.
+- 산출물은 `outputs/`(작업 폴더, gitignore) — 레퍼런스 사본은 `samples/`. 사람 확정 지식은 `curation/`(git 추적). 평가 질문·러너는 `eval/`(`questions.jsonl`·`run_eval.py`), 샘플/원본 문서는 `data/`.
 
 ## Metadata 규칙
 각 Chunk metadata에는 최소한 다음 항목을 유지한다.
