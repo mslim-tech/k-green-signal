@@ -40,6 +40,20 @@ def load_review_queue():
     return _load_review_queue_cached(REVIEW_QUEUE_PATH.stat().st_mtime)
 
 
+# 원문 페이지 미리보기 — extract_vision 의 렌더러 재사용. (source, page) 단위 캐시.
+# dpi=150: 화면 확인용은 추출용 200 까지 불필요(렌더 속도·메모리 절약). max_entries 로 상한.
+@st.cache_data(show_spinner=False, max_entries=32)
+def _page_image(source: str, page: int, dpi: int = 150) -> bytes | None:
+    """ 원문 PDF 의 해당 페이지를 PNG 로 렌더링. PDF 가 없거나 페이지가 없으면 None. """
+    from rag.ingest.extract_vision import render_page_images, _resolve_pdf
+    try:
+        pdf = _resolve_pdf(source)
+    except FileNotFoundError:
+        return None                     # 샘플 클론에는 원본 PDF 가 없다 — 미리보기만 생략
+    imgs = render_page_images(pdf, page, page, dpi=dpi)
+    return imgs[0] if imgs else None
+
+
 # 표에 보여줄 핵심 컬럼(31개 다 보여주면 복잡하므로 추렸다). 상세는 아래 패널에서.
 TABLE_COLUMNS = [
     "review_priority", "year", "std_id", "std_response_label",
@@ -123,6 +137,24 @@ def render_detail_and_edit(row, latest):
     if (row.get("prev_year_note") or "").strip():
         st.caption(f"전년 대비 노트(원문): {row.get('prev_year_note')}")
 
+    # 원문 페이지 미리보기 — "사람이 원문을 보고 확정"을 앱 안에서 완결한다.
+    src = (row.get("source") or "").strip()
+    ps = (row.get("page_start") or "").strip()
+    pe = (row.get("page_end") or "").strip()
+    title = f"📄 원문 페이지 보기 — {src} p.{ps}" + (f"-{pe}" if pe and pe != ps else "")
+    with st.expander(title, expanded=True):
+        if src and ps.isdigit():
+            png = _page_image(src, int(ps))
+            if png is not None:
+                st.image(png, width="stretch", caption=f"{src} p.{ps}")
+                if pe.isdigit() and int(pe) > int(ps):
+                    st.caption(f"(표가 p.{ps}-{pe}에 걸쳐 있습니다 — 첫 페이지만 표시)")
+            else:
+                st.caption("원문 PDF 가 data/ 에 없어 페이지 미리보기를 표시할 수 없습니다. "
+                           "위 '출처' 표기를 참고해 원문에서 직접 확인해 주세요.")
+        else:
+            st.caption("출처 페이지 정보가 없어 원문 미리보기를 표시할 수 없습니다.")
+
     # 이 행에 대한 직전 검수 기록이 있으면 보여준다(같은 행 재검수 참고용).
     prev = latest.get(corrections.row_key(row) + ("value",))
     if prev:
@@ -133,17 +165,23 @@ def render_detail_and_edit(row, latest):
         )
 
     # --- 수정 폼 ---
-    with st.form("review_edit_form"):
+    # 행 식별키로 위젯 키를 고정 — 행 전환 시 직전 행의 입력값(메모 등)이 남지 않게.
+    k = "_".join(corrections.row_key(row))
+    with st.form(f"review_edit_{k}"):
         status = st.radio(
             "검수 결과",
-            list(STATUS_LABELS.keys()),
+            # 기본값을 '원래 값 맞음'으로 — 무심코 저장해도 '값 고침'으로 오기록하지 않게(안전 기본값).
+            [corrections.STATUS_CONFIRMED, corrections.STATUS_FIXED, corrections.STATUS_SKIP],
             format_func=lambda s: STATUS_LABELS[s],
-            horizontal=True,
+            horizontal=True, key=f"rv_status_{k}",
         )
         # 이미 정정된 값이 있으면 그 값을 기본으로 채워, 확인 후 그대로 저장만 누르면 되게 한다.
-        new_value = st.text_input("고친 값 ('값 고침'일 때만 반영)", value=effective_value(row, latest))
-        note = st.text_input("메모(선택)", value=(prev.get("note", "") if prev else ""))
-        reviewer = st.text_input("검수자(선택)", value=(prev.get("reviewer", "") if prev else ""))
+        new_value = st.text_input("고친 값 ('값 고침'일 때만 반영)",
+                                  value=effective_value(row, latest), key=f"rv_value_{k}")
+        note = st.text_input("메모(선택)", value=(prev.get("note", "") if prev else ""),
+                             key=f"rv_note_{k}")
+        reviewer = st.text_input("검수자(선택)", value=(prev.get("reviewer", "") if prev else ""),
+                                 key=f"rv_reviewer_{k}")
         submitted = st.form_submit_button("💾 저장")
         if submitted:
             corrections.add_correction(
@@ -156,6 +194,30 @@ def render_detail_and_edit(row, latest):
             )
             st.success("저장했습니다. (outputs/corrections.jsonl)")
             st.rerun()
+
+
+def _render_sequential(filtered: list[dict], latest: dict, reviewed: set) -> None:
+    """ 순차 검수: 필터된 목록에서 '미검수' 행만 한 건씩 보여준다.
+        저장하면(add_correction→rerun) 그 행이 reviewed 로 빠지므로,
+        같은 위치(pos)가 자연히 '다음 미검수 행'이 된다 — 별도 이동 로직 불필요. """
+    pending = [r for r in filtered if corrections.row_key(r) not in reviewed]
+    if not pending:
+        st.success("이 필터에서 미검수 행이 없습니다 🎉 — 토글을 꺼서 전체 표를 확인하세요.")
+        return
+    pos = st.session_state.setdefault("review_seq_pos", 0)
+    pos = min(max(pos, 0), len(pending) - 1)   # 필터 변경으로 목록이 줄어도 안전하게 클램프
+    st.session_state.review_seq_pos = pos
+
+    c1, c2, c3 = st.columns([2, 1, 1], vertical_alignment="center")
+    c1.caption(f"미검수 {len(pending)}건 남음 · {pos + 1}/{len(pending)}번째 (저장하면 자동으로 다음 행)")
+    if c2.button("◀ 이전", key="seq_prev", disabled=(pos == 0), width="stretch"):
+        st.session_state.review_seq_pos = pos - 1
+        st.rerun()
+    if c3.button("다음 ▶", key="seq_next", disabled=(pos >= len(pending) - 1), width="stretch"):
+        st.session_state.review_seq_pos = pos + 1
+        st.rerun()
+
+    render_detail_and_edit(pending[pos], latest)
 
 
 def load_vision_candidates() -> list[dict]:
@@ -427,6 +489,13 @@ def render_review_tab(gate=None):
     if not filtered:
         st.info("필터에 해당하는 행이 없습니다.")
         return
+
+    # --- 순차 검수 모드 — 미검수 행을 한 건씩(저장하면 자동으로 다음 행) ---
+    # st.dataframe 선택은 읽기 전용이라 '저장 후 다음 행 자동 선택'이 불가능하므로,
+    # 미검수 목록 + 위치 포인터로 순차 진행한다. 토글을 끄면 기존 표(브라우즈)가 그대로.
+    if st.toggle("🚀 순차 검수 모드 — 미검수 행을 한 건씩", key="review_seq"):
+        _render_sequential(filtered, latest, reviewed)
+        return   # 표와 동시에 그리지 않는다(수정 폼 중복 방지)
 
     # --- 표 (행 선택 가능) ---
     # 원본 값 옆에 '정정값'(검수 반영값)을 같이 보여줘 수치가 제대로 들어갔는지 눈으로 확인.
