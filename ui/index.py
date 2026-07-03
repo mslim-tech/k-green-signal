@@ -41,8 +41,10 @@ def render_step_index(ctx: dict, gate=None) -> None:
             try:
                 from rag.retrieval import chunking
                 from rag.retrieval import index as indexmod
-                st.write("청킹(확정 사실 → 청크)…")
-                chunks = chunking.build_chunks(chunking.load_rows())
+                st.write("청킹(확정 사실 + 방법론·외부 맥락 지식청크)…")
+                # CLI(chunking.main)와 동일한 전체 청크셋 — 사실 청크만 넣으면
+                # advise 모드의 근거(방법론·외부 맥락 지식청크)가 조용히 사라진다.
+                chunks = chunking.build_all_chunks(chunking.load_rows())
                 chunking.save_chunks(chunks)
                 st.write(f"청크 {len(chunks)}개 — 임베딩·Chroma 인덱싱…")
                 n = indexmod.build_index(reset=True)

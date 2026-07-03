@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 import time
 
 import streamlit as st
@@ -25,14 +26,18 @@ logger = logging.getLogger("app")   # app.py 와 같은 로거 이름(검수·ad
 #    - 저장은 rag/curate/corrections.py 가 outputs/corrections.jsonl 에 한 줄씩 쌓는다.
 # -----------------------------------------------------------------------------
 
-# 검수 큐는 한 번 만들어지면 잘 안 바뀌므로 캐시한다(앱이 빨라진다).
-@st.cache_data
+# 검수 큐 캐시 — 파일 mtime 을 캐시 키로 써서, 재인제스트로 파일이 바뀌면 자동 무효화된다.
+@st.cache_data(show_spinner=False)
+def _load_review_queue_cached(mtime: float):
+    with open(REVIEW_QUEUE_PATH, "r", encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
 def load_review_queue():
     """ review_queue.csv 를 dict 리스트로 읽는다. 파일이 없으면 None. """
     if not REVIEW_QUEUE_PATH.exists():
         return None
-    with open(REVIEW_QUEUE_PATH, "r", encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
+    return _load_review_queue_cached(REVIEW_QUEUE_PATH.stat().st_mtime)
 
 
 # 표에 보여줄 핵심 컬럼(31개 다 보여주면 복잡하므로 추렸다). 상세는 아래 패널에서.
@@ -227,9 +232,28 @@ def _adjudicate_launch(count: int) -> None:
     """ LLM 검증(adjudicate)을 서브프로세스로 시작하고 세션에 보관한다(길어서 앱을 막지 않게). """
     run_id = pipeline.new_run_id()
     proc = pipeline.launch_adjudicate(run_id, count)
-    st.session_state.adjudicate = {"run_id": run_id, "started": time.time(), "count": count}
+    st.session_state.adjudicate = {"run_id": run_id, "started": time.time(),
+                                   "count": count, "pid": proc.pid}
     st.session_state.adjudicate_proc = proc
+    # 새로고침으로 세션이 날아가도 이어받도록 pid 를 영속화(같은 후보 재실행=이중 과금 방지).
+    pipeline.save_state(st.session_state.adjudicate, pipeline.ADJ_STATE_FILE)
     logger.info("LLM 검증 시작: run=%s pid=%s count=%s", run_id, proc.pid, count)
+
+
+def _adjudicate_recover() -> None:
+    """ 새로고침으로 세션이 날아갔어도 진행 중 LLM 검증을 이어받는다(인제스트 복구와 같은 방식).
+        Popen 은 저장할 수 없으므로 pid 생존으로 판정한다. """
+    if st.session_state.get("adjudicate"):
+        return
+    saved = pipeline.load_state(pipeline.ADJ_STATE_FILE)
+    if not saved:
+        return
+    if pipeline.pid_alive(saved.get("pid")):
+        st.session_state.adjudicate = saved
+        st.session_state.adjudicate_proc = None   # Popen 은 복구 불가 — pid 로만 관리
+        st.info("↻ 새로고침 전 진행 중이던 LLM 검증을 이어받았습니다.")
+    else:
+        pipeline.ADJ_STATE_FILE.unlink(missing_ok=True)   # 이미 끝난 실행의 잔재 정리
 
 
 @st.fragment(run_every=2)
@@ -240,19 +264,25 @@ def _adjudicate_monitor() -> None:
         return
     proc = st.session_state.get("adjudicate_proc")
     dt = time.time() - adj["started"]
-    if proc is not None and pipeline.alive(proc):
+    # 복구 세션엔 Popen 이 없으니 pid 생존으로 판정한다.
+    running = pipeline.alive(proc) if proc is not None else pipeline.pid_alive(adj.get("pid"))
+    if running:
         st.write(f"▶ 🤖 LLM 검증 진행 중 ({dt:.0f}s) — 최대 {adj['count']}건")
         tail = pipeline.tail(pipeline.step_log_path(adj["run_id"], "adjudicate"), 15)
         st.code(tail or "(시작 중…)", language="log")
         if st.button("■ 취소", key="adj_cancel"):
             if proc is not None:
                 pipeline.cancel(proc)
+            else:
+                pipeline.cancel_pid(adj.get("pid"))
+            pipeline.ADJ_STATE_FILE.unlink(missing_ok=True)
             st.session_state.adjudicate = None
             st.session_state.adjudicate_proc = None
             st.rerun(scope="app")
     else:
         st.success(f"✅ LLM 검증 완료 ({dt:.0f}s). 게이트를 다시 계산합니다.")
         logger.info("LLM 검증 완료: run=%s", adj["run_id"])
+        pipeline.ADJ_STATE_FILE.unlink(missing_ok=True)
         st.session_state.adjudicate = None
         st.session_state.adjudicate_proc = None
         st.rerun(scope="app")
@@ -260,7 +290,8 @@ def _adjudicate_monitor() -> None:
 
 def render_review_tab(gate=None):
     st.subheader("🔍 검수 큐")
-    st.caption("4단계가 고른 저신뢰 행을 사람이 확인/수정합니다. 원본 CSV 는 건드리지 않고 corrections.jsonl 에만 기록합니다.")
+    st.caption("인제스트가 고른 저신뢰 행을 사람이 확인/수정합니다. 원본 CSV 는 건드리지 않고 corrections.jsonl 에만 기록합니다.")
+    _adjudicate_recover()   # 새로고침 전 진행 중이던 LLM 검증이 있으면 이어받는다.
 
     # 비전 재판독 후보(있으면)를 먼저 처리 — 검수 부담을 줄이는 핵심(원클릭 확정).
     latest_recs = corrections.latest_by_key()
@@ -268,7 +299,7 @@ def render_review_tab(gate=None):
 
     queue = load_review_queue()
     if queue is None:
-        st.info("`outputs/review_queue.csv` 가 없습니다. 먼저 4단계(`uv run python -m rag.transform.review`)를 실행하세요.")
+        st.info("`outputs/review_queue.csv` 가 없습니다. 먼저 2단계(⚙️ 인제스트)에서 '▶ 전체 실행'을 눌러 검수 큐를 만들어 주세요.")
         return
     if not queue:
         st.success("검수할 행이 없습니다. 🎉")
@@ -315,6 +346,8 @@ def render_review_tab(gate=None):
                 f"🤖 **LLM 검증** — 불확실 high {n_uncertain}건을 원문 페이지(비전)로 독립 대조해 "
                 "일치하면 자동 확정(llm_verified), 애매하면 사람에게 남깁니다. **실제 API 과금**."
             )
+            # 🔑 실제 과금 단계 — 키 없으면 실행 자체를 막는다(RAG_FAKE_LLM 스텁은 무료라 허용).
+            has_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("RAG_FAKE_LLM"))
             running = bool(st.session_state.get("adjudicate"))
             ac1, ac2 = st.columns([1, 2], vertical_alignment="bottom")
             with ac1:
@@ -322,10 +355,12 @@ def render_review_tab(gate=None):
                                    key="adj_count", disabled=running)
             with ac2:
                 if st.button("🤖 LLM 검증 실행", width="stretch", key="adj_run",
-                             disabled=(running or not n_uncertain)):
+                             disabled=(running or not n_uncertain or not has_key)):
                     n = n_uncertain if cnt == "전체" else int(cnt)
                     _adjudicate_launch(n)
                     st.rerun()
+            if not has_key:
+                st.caption("🔑 `.env` 의 OPENAI_API_KEY 가 없어 실행할 수 없습니다(실제 API 과금 단계).")
             if st.session_state.get("adjudicate"):
                 _adjudicate_monitor()
     elif _gate is not None and _gate.ok:

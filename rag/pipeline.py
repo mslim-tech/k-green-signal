@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = OUTPUT_DIR / "runs"
 STATE_FILE = OUTPUT_DIR / "ingest_state.json"   # 현재/마지막 인제스트 실행 1건(영속화)
+ADJ_STATE_FILE = OUTPUT_DIR / "adjudicate_state.json"   # 진행 중 LLM 검증(새로고침 복구용)
 
 
 @dataclass
@@ -267,20 +268,24 @@ def tail(path: Path, n: int = 50) -> str:
 # 브라우저 새로고침으로 Streamlit 세션이 날아가도 앱이 다시 읽어 진행을 이어간다.
 # (Popen 객체는 저장 못 하므로 pid 만 저장 → 복구 시 pid 생존·산출파일로 판정한다.)
 
-def save_state(state: dict) -> None:
-    """ 인제스트 실행 상태를 outputs/ingest_state.json 에 기록(원자적 교체). """
+def save_state(state: dict, path: Path | None = None) -> None:
+    """ 실행 상태를 JSON 으로 기록(원자적 교체). 기본은 인제스트(STATE_FILE),
+        LLM 검증 등 다른 1회성 작업은 path 를 지정해 같은 방식으로 영속화한다.
+        (기본값은 호출 시점에 해석한다 — 테스트가 STATE_FILE 을 monkeypatch 할 수 있게.) """
+    path = path or STATE_FILE
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_suffix(".json.tmp")
+    tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    tmp.replace(path)
 
 
-def load_state() -> dict | None:
-    """ 저장된 인제스트 실행 상태(없으면 None). """
-    if not STATE_FILE.exists():
+def load_state(path: Path | None = None) -> dict | None:
+    """ 저장된 실행 상태(없으면 None). """
+    path = path or STATE_FILE
+    if not path.exists():
         return None
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
 

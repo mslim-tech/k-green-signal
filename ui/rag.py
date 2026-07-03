@@ -63,7 +63,14 @@ def render_rag_tab(gate=None):
           if mode == "advise" else "예: 2024년 환경표지 정의 인지율은?")
     c1, c2 = st.columns([3, 1])
     with c2:
-        year = st.selectbox("연도 필터", ["전체", "2023", "2024", "2025"], index=0)
+        # 연도 필터는 데이터에서 도출(하드코딩 금지) — 새 연도 보고서를 올리면 자동 반영.
+        try:
+            from rag.retrieval import chunking
+            from rag import signals
+            year_opts = ["전체"] + [str(y) for y in signals.dataset_years(chunking.load_rows())]
+        except Exception:
+            year_opts = ["전체"]   # 정형 데이터가 아직 없으면 필터 없이 진행
+        year = st.selectbox("연도 필터", year_opts, index=0)
     with c1:
         question = st.text_input("질문", placeholder=ph, key="rag_question")
 
@@ -83,7 +90,7 @@ def render_rag_tab(gate=None):
         except Exception as error:
             st.error(
                 f"검색/답변 중 오류: {error}\n\n"
-                "인덱스가 없다면 먼저 `uv run python -m rag.retrieval.index` 를 실행하세요."
+                "인덱스가 없다면 4단계(📚 인덱싱)에서 '📚 인덱싱 실행'을 눌러 주세요."
             )
             return
 
