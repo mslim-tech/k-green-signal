@@ -38,7 +38,7 @@ uv run python -m rag.retrieval.chunking && uv run python -m rag.retrieval.index 
 
 ### 실행 환경변수(env)
 - `OPENAI_API_KEY` — `.env`에서만 읽는다(코드/문서에 직접 쓰지 않음).
-- `RAG_FAKE_LLM` — 세팅 시 LLM 호출을 결정적 스텁으로 대체(추출·답변 스텁, rerank 생략). E2E·단위 테스트가 이걸로 무료·결정적 실행. **UI 배선만 검증** — 실제 동작 확인이 필요하면 스텁 없이 실행.
+- `RAG_FAKE_LLM` — 세팅 시 LLM 호출을 결정적 스텁으로 대체(추출·답변·adjudicate·refill 스텁, rerank 생략). E2E·단위 테스트가 이걸로 무료·결정적 실행. **UI 배선만 검증** — 실제 동작 확인이 필요하면 스텁 없이 실행. ⚠️ `standardize`·`refine`·`flags`(4.3.2)·`index`(임베딩)에는 스텁이 없어 FAKE 로도 **실제 API 를 호출**한다 → E2E 는 표준화 진입 전에 인제스트를 취소한다.
 - `RAG_OUTPUT_DIR` — 산출물 디렉터리(기본 `outputs`). E2E는 임시 복사본을 가리켜 실제 `outputs/`를 건드리지 않는다.
 - `RAG_LOG_DIR`(기본 `logs`) · `RAG_LOG_LEVEL`(기본 `INFO`).
 
@@ -91,7 +91,8 @@ std_id 가 비결정적으로 바뀌어 corrections·routing·eval·테스트가
 
 **설정·경로·모델의 단일 지점:**
 - 모델명은 전부 `rag/core/config.py`에서만(현재 생성계열 `gpt-5.4-mini`, 임베딩 `text-embedding-3-small`). 파일마다 하드코딩 금지.
-- 산출물 경로는 `rag/core/paths.py`의 `OUTPUT_DIR`(env override).
+- 산출물 경로는 `rag/core/paths.py`의 `OUTPUT_DIR`(env override). UI 공용 경로도 `ui/common.py`가 이 `OUTPUT_DIR` 경유(하드코딩 `Path("outputs")` 금지 — E2E 격리가 깨진다).
+- 입력 CSV 는 `chunking.source_csv()`(**호출 시점** 해석: dedup 우선, 없으면 clean)로 고른다. 모듈 상수 `SOURCE_CSV` 는 import 시점 고정이라, 첫 세션이 인제스트로 `dedup.csv` 를 새로 만들어도 프로세스 재시작 전까지 못 본다 → 새 소비자는 함수를 쓴다.
 - 각 `rag/*.py`는 `from rag.x import ...`(패키지) / `from x import ...`(직접 실행) 이중 import를 try/except로 지원 — 새 모듈도 이 패턴을 따른다.
 
 **앱 오케스트레이션**: `app.py`는 3모드 — 🚦 대시보드(정형 CSV가 있으면 랜딩, 키·인덱스 불필요) · 💬 AI에게 묻기(RAG 질의·advise) · 🛠 데이터 준비(업로드→인제스트→검수→인덱싱 4단계 게이트 스텝퍼) + 🩺 시스템 로그. 긴 LLM 단계는 `rag/pipeline.py`로 **서브프로세스** 실행해 Streamlit을 막지 않고 로그를 단계별 캡처한다(Popen은 `st.session_state`에 보관, 새로고침 복구는 pid 영속화).
