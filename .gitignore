@@ -18,12 +18,19 @@ service-account*.json
 gcloud-*.json
 
 # =============================================================================
-# 보안: 조사 원본 자료 · 추출 데이터 (기밀 가능성 → 기본 무시)
-#   - 공개 자료라 저장소에 포함하려면 아래 두 줄을 주석 처리하세요.
-#   - 특정 샘플만 올리려면: 예) !data/sample.pdf
+# 작업 폴더(각자 데이터) — git 추적 안 함. 재사용자가 자기 PDF·산출물을 올려도 충돌 0.
+#   - 루트 고정(/)이라 samples/ 하위의 레퍼런스(samples/data·samples/outputs)는 추적된다.
+#   - 클론 후 `uv run python scripts/bootstrap_samples.py` 로 samples→작업폴더 복사하면
+#     신호등 대시보드·RAG 검색이 키 없이 바로 동작한다(README 퀵스타트 참고).
+#   - 레퍼런스 정책: 정형 CSV·청크·Chroma 인덱스(samples/outputs)는 커밋해 '키 없이 검색'을
+#     보장하고, 원본 PDF(약 44MB)는 용량상 제외한다(공개 official 보고서 — samples/data/README).
 # =============================================================================
-data/
-outputs/
+/data/
+/outputs/
+# 원본 PDF는 용량상 제외(레퍼런스는 CSV·청크·Chroma 인덱스로 충분 — 보기엔 PDF 불필요).
+samples/data/*.pdf
+# 실행마다 쌓이는 임시 산출물(런 로그 등)은 samples 안에서도 제외한다.
+samples/outputs/runs/
 
 # =============================================================================
 # 로컬 도구 설정 (Claude Code 등) — 개인 환경 전용
