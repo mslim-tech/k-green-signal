@@ -263,6 +263,9 @@ def render_vision_candidates() -> None:
     for i, c in enumerate(pending):
         loc = f"{c.get('source','')} p.{(c.get('page') or '').split('-')[0]}"
         act = {"fill": "빈칸 채움", "inject": "누락행 추가"}.get(c.get("action"), c.get("action", ""))
+        # 버튼 키는 위치(i)가 아니라 행 식별키로 — 확정/기각으로 목록이 줄어 순서가 밀려도
+        # 클릭이 다른 후보에 붙지 않게 한다(붙으면 엉뚱한 값이 데이터로 확정됨).
+        kid = f"{i}_" + "_".join(corrections.row_key(_candidate_row(c)))
         with st.container(border=True):
             st.markdown(
                 f"**{c.get('std_id','')}** · {c.get('year','')}년 — "
@@ -275,7 +278,7 @@ def render_vision_candidates() -> None:
             st.caption(f"출처: {loc}")
             b1, b2 = st.columns(2)
             with b1:
-                if st.button("✅ 확정(데이터로 반영)", key=f"vc_ok_{i}", type="primary"):
+                if st.button("✅ 확정(데이터로 반영)", key=f"vc_ok_{kid}", type="primary"):
                     corrections.add_correction(
                         _candidate_row(c),
                         status=corrections.STATUS_FIXED,
@@ -285,11 +288,14 @@ def render_vision_candidates() -> None:
                     st.success("확정 저장(corrections.jsonl). 4단계 재인덱싱 시 반영됩니다.")
                     st.rerun()
             with b2:
-                if st.button("🚫 기각(제안 무시)", key=f"vc_no_{i}"):
+                if st.button("🚫 기각(제안 무시)", key=f"vc_no_{kid}"):
+                    # 기각 = '제안을 무시하고 원래 값 유지'. skip 으로 기록하면 chunking 이
+                    # 그 행 자체를 인덱스에서 제외해 버리므로(조용한 데이터 소실),
+                    # confirmed(원래 값 유지)로 기록해 후보만 숨긴다.
                     corrections.add_correction(
                         _candidate_row(c),
-                        status=corrections.STATUS_SKIP,
-                        note=f"비전 제안 기각 — {loc}",
+                        status=corrections.STATUS_CONFIRMED,
+                        note=f"비전 제안 기각(원래 값 유지) — {loc}",
                     )
                     st.rerun()
     st.divider()
@@ -438,6 +444,14 @@ def render_review_tab(gate=None):
                 _adjudicate_monitor()
     elif _gate is not None and _gate.ok:
         st.success("✅ 인덱싱 게이트 통과 — 4단계에서 인덱싱할 수 있습니다.")
+        # 집중 모드는 게이트 차단 행만 보여주므로, 게이트가 통과되면 자동 해제한다
+        # (해제 버튼이 위 패널과 함께 사라져 목록이 빈 채로 잠기는 막다른 길 방지).
+        if focus:
+            st.session_state.review_focus = None
+            focus = None
+        # 진행 중 LLM 검증이 있으면 게이트 상태와 무관하게 모니터(취소·완료 감지)를 유지한다.
+        if st.session_state.get("adjudicate"):
+            _adjudicate_monitor()
 
     # --- D3: 값이 비어 반드시 검수해야 하는 행 안내(직접 찾지 않게) ---
     # 이미 사람이 '빈 값이 맞다(confirmed)'거나 '제외(skip)'로 처리한 행은 needs_value 가

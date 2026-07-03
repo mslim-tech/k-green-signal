@@ -126,7 +126,7 @@ def render_rag_tab(gate=None):
         # 연도 필터는 데이터에서 도출(하드코딩 금지) — 새 연도 보고서를 올리면 자동 반영.
         try:
             from rag.retrieval import chunking
-            year_opts = _year_options(chunking.SOURCE_CSV.stat().st_mtime)
+            year_opts = _year_options(chunking.source_csv().stat().st_mtime)
         except Exception:
             year_opts = ["전체"]   # 정형 데이터가 아직 없으면 필터 없이 진행
         year = st.selectbox("연도 필터", year_opts, index=0)
@@ -142,16 +142,24 @@ def render_rag_tab(gate=None):
         st.error(f"RAG 모듈을 불러오지 못했습니다: {error}")
         return
 
-    with st.spinner("검색하고 근거로 답하는 중..."):
-        try:
-            result = rag_answer(question, k=5, year=None if year == "전체" else year,
-                                mode=mode, detail=detail, rewrite=rewrite)
-        except Exception as error:
-            st.error(
-                f"검색/답변 중 오류: {error}\n\n"
-                "인덱스가 없다면 4단계(📚 인덱싱)에서 '📚 인덱싱 실행'을 눌러 주세요."
-            )
-            return
+    # 같은 입력이면 재생성하지 않는다 — 답변 아래의 '원문 페이지 보기' 토글 등 rerun 위젯이
+    # 유료 LLM 답변 생성을 반복 유발하지 않게(입력이 바뀔 때만 새로 생성).
+    params = (question, mode, detail, year, rewrite)
+    cached = st.session_state.get("rag_last_answer")
+    if cached and cached[0] == params:
+        result = cached[1]
+    else:
+        with st.spinner("검색하고 근거로 답하는 중..."):
+            try:
+                result = rag_answer(question, k=5, year=None if year == "전체" else year,
+                                    mode=mode, detail=detail, rewrite=rewrite)
+            except Exception as error:
+                st.error(
+                    f"검색/답변 중 오류: {error}\n\n"
+                    "인덱스가 없다면 4단계(📚 인덱싱)에서 '📚 인덱싱 실행'을 눌러 주세요."
+                )
+                return
+        st.session_state["rag_last_answer"] = (params, result)
 
     if result.rewritten:
         st.caption(f"🔎 검색어 재작성: _{result.rewritten}_")

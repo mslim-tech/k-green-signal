@@ -5,7 +5,7 @@
     "dotenv", "streamlit", "Streamlit", "pyproject", "addopts", "pytest", "testpaths",
     "venv", "uv", "Popen", "chroma", "Chroma", "chromadb", "pypdf", "pymupdf", "tiktoken",
     "rerank", "Reranker", "openai", "embeddings", "levelname", "langchain", "pyyaml",
-    "dedup", "DEDUP", "oldyears", "stdid", "STDID", "stdids", "qmap",
+    "dedup", "DEDUP", "greenmark", "oldyears", "stdid", "STDID", "stdids", "qmap",
     "selectbox", "pdfs", "runlog", "indexmod", "byyear", "cands", "inds", "summ",
     "vmap", "nlab", "vitems", "vval", "newv", "ysrc", "slabel", "cand", "ccols",
     "cpath", "fullkey", "mslim", "timespec",

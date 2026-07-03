@@ -183,17 +183,18 @@ k-green-signal/
 
 산출물(정형 CSV·청크·**Chroma 인덱스**)을 `samples/` 에 커밋해 두었습니다(원본 PDF는 용량상 제외 —
 결과 보기엔 불필요, 출처는 [`samples/data/README.md`](./samples/data/README.md)).
-부트스트랩이 이를 작업 폴더로 펼치면 **키 없이도** 신호등 대시보드·RAG 검색이 바로 동작합니다.
+부트스트랩이 이를 작업 폴더로 펼치면 **키 없이도** 신호등 대시보드가 바로 동작합니다
+(벡터 검색·답변 생성은 질문 임베딩에 OpenAI 키가 필요합니다).
 
 ```bash
 git clone https://github.com/mslim-tech/k-green-signal.git && cd k-green-signal
 uv sync                                              # 1) 의존성 설치
 uv run python scripts/bootstrap_samples.py           # 2) samples/ → data/·outputs/ 로 펼침
-uv run streamlit run app.py                          # 3) 앱 실행(신호등·검색은 키 없이 O)
+uv run streamlit run app.py                          # 3) 앱 실행(신호등은 키 없이 O)
 ```
 
-> **RAG '답변 생성'** 만 각자 키가 필요합니다: `cp .env.example .env` 후 `OPENAI_API_KEY=sk-...` 를 채우세요.
-> 신호등 대시보드와 벡터 검색은 키 없이 동작합니다.
+> **RAG 검색·답변 생성**은 각자 키가 필요합니다(질문 임베딩·생성 모두 OpenAI 호출):
+> `cp .env.example .env` 후 `OPENAI_API_KEY=sk-...` 를 채우세요. 신호등 대시보드는 키 없이 동작합니다.
 >
 > `data/`·`outputs/` 는 git 이 추적하지 않는 **작업 폴더**입니다(각자 데이터 → 충돌 0). 자기 PDF 로
 > 새로 작업하려면 부트스트랩을 건너뛰고 아래 B) 로 진행하세요. 레퍼런스로 되돌리려면

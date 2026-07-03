@@ -40,6 +40,16 @@ from rag.core.paths import OUTPUT_DIR
 # dedup(4.2) 결과를 우선 입력으로 (없으면 clean). flagged 도 가능하지만 값은 동일.
 _DEDUP = OUTPUT_DIR / "standardized_long.dedup.csv"
 _CLEAN = OUTPUT_DIR / "standardized_long.clean.csv"
+
+
+def source_csv():
+    """ 입력 CSV 를 '호출 시점'에 고른다(dedup 우선, 없으면 clean).
+        임포트 시점에 고정하면, 첫 세션에서 인제스트로 dedup.csv 가 새로 생겨도
+        게이트·인덱싱·대시보드가 프로세스 재시작 전까지 pre-dedup 데이터를 계속 읽는다. """
+    return _DEDUP if _DEDUP.exists() else _CLEAN
+
+
+# (하위호환 스냅샷 — 로직에는 source_csv() 를 쓴다. 임포트 시점 값이라 신선하지 않을 수 있음)
 SOURCE_CSV = _DEDUP if _DEDUP.exists() else _CLEAN
 CHUNKS_JSONL = OUTPUT_DIR / "chunks.jsonl"
 
@@ -54,11 +64,12 @@ def count_tokens(text: str) -> int:
 
 
 def load_rows() -> list[dict]:
-    if not SOURCE_CSV.exists():
+    src = source_csv()
+    if not src.exists():
         raise RuntimeError(
-            f"{SOURCE_CSV} 가 없습니다. 먼저 3~4단계 파이프라인을 실행하세요."
+            f"{src} 가 없습니다. 먼저 3~4단계 파이프라인을 실행하세요."
         )
-    with open(SOURCE_CSV, "r", encoding="utf-8-sig", newline="") as f:
+    with open(src, "r", encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))
     # 사람이 확정한 보정값을 먼저 반영(인덱스엔 확정 사실만)
     rows, _ = corrections.apply_corrections(rows)
@@ -265,7 +276,7 @@ def main() -> None:
     empty = sum(1 for c in fact_chunks if c["metadata"]["n_responses"] == 0)
     print("\n" + "=" * 60)
     print(f"청킹 완료 — {len(chunks)} 청크 (사실 {len(fact_chunks)} + 방법론 지식 {len(know_chunks)} "
-          f"+ 외부 맥락 {len(ctx_chunks)}, {SOURCE_CSV.name} 기준, corrections 반영)")
+          f"+ 외부 맥락 {len(ctx_chunks)}, {source_csv().name} 기준, corrections 반영)")
     print(f"  총 토큰(대략): {n_tok:,} | 평균 {n_tok // max(1,len(chunks))}/청크")
     if empty:
         print(f"  ⚠️ 응답 줄이 0인 청크: {empty}개 (값이 다 빈 문항 — 검수 대상)")

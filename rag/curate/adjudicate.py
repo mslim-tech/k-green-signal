@@ -162,11 +162,19 @@ def adjudicate_row(client, row: dict) -> dict:
 
 
 def _apply_verdict(row: dict, verdict: dict) -> str:
-    """ verdict 를 corrections.jsonl 에 반영한다. 반환: 'confirmed'|'corrected'|'escalated'. """
+    """ verdict 를 corrections.jsonl 에 반영한다.
+        반환: 'confirmed'|'corrected'|'escalated'|'skipped'(사람이 먼저 검수함). """
     v = verdict.get("verdict")
     reason = (verdict.get("reason") or "")[:200]
+    # 쓰기 직전 재확인 — LLM 판독(수 초) 사이 사람이 같은 행을 검수했으면 덮어쓰지 않는다.
+    # (corrections 는 최신 기록 우선이라, 나중에 쓰는 LLM 이 사람 판단을 뒤집게 되기 때문)
+    if v in ("agree", "correct") and corrections.row_key(row) in corrections.reviewed_keys():
+        return "skipped"
     if v == "agree":
-        # 원문이 추출값을 지지 → 그 값 그대로 확정.
+        # 원문이 추출값을 지지 → 그 값 그대로 확정. 단 값이 숫자가 아니면(빈칸 등)
+        # '지지'가 결측을 확정하는 셈이라 확정하지 않고 사람에게 남긴다.
+        if _num(row.get("value")) is None:
+            return "escalated"
         corrections.add_correction(
             row, status=corrections.STATUS_LLM_VERIFIED,
             new_value=(row.get("value") or "").strip(),
@@ -207,8 +215,14 @@ def main() -> None:
         print(f"❌ {error}")
         return
 
-    tally = {"confirmed": 0, "corrected": 0, "escalated": 0}
+    tally = {"confirmed": 0, "corrected": 0, "escalated": 0, "skipped": 0}
     for i, row in enumerate(cands, start=1):
+        # 호출 전에도 확인 — 실행 중 사람이 이미 검수한 행은 판독 자체를 생략(과금 절약 + 사람 우선).
+        if corrections.row_key(row) in corrections.reviewed_keys():
+            tally["skipped"] += 1
+            print(f"[{i}/{len(cands)}] {row.get('year')} {row.get('std_id')} · "
+                  f"{(row.get('std_response_label') or '')[:24]} → 이미 검수됨(사람 우선) — 건너뜀")
+            continue
         verdict = adjudicate_row(client, row)
         outcome = _apply_verdict(row, verdict)
         tally[outcome] += 1
@@ -216,9 +230,9 @@ def main() -> None:
               f"{(row.get('std_response_label') or '')[:24]} → {verdict.get('verdict')} ({outcome})")
 
     print(f"\n결과: 확정 {tally['confirmed']} · 교정 {tally['corrected']} · "
-          f"에스컬레이션(사람) {tally['escalated']}")
-    logger.info("adjudicate 완료 — 확정 %d · 교정 %d · 에스컬레이션 %d",
-                tally["confirmed"], tally["corrected"], tally["escalated"])
+          f"에스컬레이션(사람) {tally['escalated']} · 건너뜀(검수됨) {tally['skipped']}")
+    logger.info("adjudicate 완료 — 확정 %d · 교정 %d · 에스컬레이션 %d · 건너뜀 %d",
+                tally["confirmed"], tally["corrected"], tally["escalated"], tally["skipped"])
 
 
 if __name__ == "__main__":

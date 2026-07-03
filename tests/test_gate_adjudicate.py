@@ -53,6 +53,7 @@ def test_apply_verdict_agree_and_correct(monkeypatch):
     calls = []
     monkeypatch.setattr(adjudicate.corrections, "add_correction",
                         lambda row, **kw: calls.append(kw) or {})
+    monkeypatch.setattr(adjudicate.corrections, "reviewed_keys", lambda records=None: set())
     v = adjudicate._apply_verdict(dict(ROW), {"verdict": "agree", "value": None, "reason": "r"})
     assert v == "confirmed"
     assert calls[-1]["status"] == corrections.STATUS_LLM_VERIFIED
@@ -67,8 +68,30 @@ def test_apply_verdict_escalates_without_writing(monkeypatch):
     def _boom(*a, **kw):
         raise AssertionError("escalated 인데 corrections 에 기록했다")
     monkeypatch.setattr(adjudicate.corrections, "add_correction", _boom)
+    monkeypatch.setattr(adjudicate.corrections, "reviewed_keys", lambda records=None: set())
     assert adjudicate._apply_verdict(dict(ROW), {"verdict": "uncertain", "value": None, "reason": ""}) == "escalated"
     assert adjudicate._apply_verdict(dict(ROW), {"verdict": "correct", "value": None, "reason": ""}) == "escalated"
+
+
+def test_apply_verdict_agree_on_blank_value_escalates(monkeypatch):
+    # 빈 값 행에 'agree'는 결측을 확정하는 셈 — 쓰지 않고 사람에게 남긴다.
+    def _boom(*a, **kw):
+        raise AssertionError("빈 값 agree 인데 corrections 에 기록했다")
+    monkeypatch.setattr(adjudicate.corrections, "add_correction", _boom)
+    monkeypatch.setattr(adjudicate.corrections, "reviewed_keys", lambda records=None: set())
+    blank = {**ROW, "value": ""}
+    assert adjudicate._apply_verdict(blank, {"verdict": "agree", "value": None, "reason": ""}) == "escalated"
+
+
+def test_apply_verdict_respects_human_review(monkeypatch):
+    # LLM 판독(수 초) 사이 사람이 같은 행을 검수했으면 덮어쓰지 않는다(사람 판단 우선).
+    monkeypatch.setattr(adjudicate.corrections, "reviewed_keys",
+                        lambda records=None: {corrections.row_key(ROW)})
+    def _boom(*a, **kw):
+        raise AssertionError("사람 검수를 LLM 이 덮어썼다")
+    monkeypatch.setattr(adjudicate.corrections, "add_correction", _boom)
+    assert adjudicate._apply_verdict(dict(ROW), {"verdict": "agree", "value": None, "reason": ""}) == "skipped"
+    assert adjudicate._apply_verdict(dict(ROW), {"verdict": "correct", "value": 12.5, "reason": ""}) == "skipped"
 
 
 def test_adjudicate_row_fake_mode_is_uncertain(monkeypatch):

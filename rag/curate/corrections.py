@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -79,7 +80,10 @@ def load_corrections(path: Path = CORRECTIONS_PATH) -> list[dict]:
             try:
                 records.append(json.loads(line))
             except json.JSONDecodeError:
-                # 손상된 한 줄 때문에 전체 검수가 멈추지 않도록 조용히 넘어간다.
+                # 손상된 한 줄 때문에 전체 검수가 멈추지는 않되, 조용히 삼키지 않는다
+                # (UI·adjudicate 서브프로세스가 동시에 append 하므로 유실은 보여야 한다).
+                logging.getLogger(__name__).warning(
+                    "corrections.jsonl 파싱 실패 줄 건너뜀: %.80s", line)
                 continue
     return records
 

@@ -124,7 +124,7 @@ LLM 보조의 흔한 실수(불필요한 변경·과설계·뒤늦은 질문)를
 ## 보안
 - API Key는 `.env`의 `OPENAI_API_KEY`에서만 읽는다. 코드/문서에 절대 직접 쓰지 않는다.
 - `.env`·`data/`(작업 폴더 원본 PDF)·`outputs/`(작업 폴더 산출물)·`logs/`·`test-results/`는 커밋하지 않는다(`.gitignore`, 루트 고정 `/data/`·`/outputs/`).
-- **클론 즉시 재현**: 산출물(정형 CSV·청크·**Chroma 인덱스**) 레퍼런스 사본은 `samples/`에 커밋한다(작업 폴더와 분리 → 재사용자 충돌 0). 원본 PDF는 용량상 제외한다(`.gitignore: samples/data/*.pdf` — 공개 official 보고서, 출처는 `samples/data/README.md`; 결과 보기엔 PDF 불필요). 클론 후 `uv run python scripts/bootstrap_samples.py`가 `samples/`→작업 폴더로 펼친다(신호등·검색은 키 없이 동작, RAG 답변 생성만 각자 키). `.gitignore`의 `/data/`·`/outputs/`는 루트 고정이라 `samples/` 하위 레퍼런스는 추적된다.
+- **클론 즉시 재현**: 산출물(정형 CSV·청크·**Chroma 인덱스**) 레퍼런스 사본은 `samples/`에 커밋한다(작업 폴더와 분리 → 재사용자 충돌 0). 원본 PDF는 용량상 제외한다(`.gitignore: samples/data/*.pdf` — 공개 official 보고서, 출처는 `samples/data/README.md`; 결과 보기엔 PDF 불필요). 클론 후 `uv run python scripts/bootstrap_samples.py`가 `samples/`→작업 폴더로 펼친다(신호등은 키 없이 동작; 검색·답변 생성은 질문 임베딩부터 각자 키 필요). `.gitignore`의 `/data/`·`/outputs/`는 루트 고정이라 `samples/` 하위 레퍼런스는 추적된다.
 - 외부에 푸시하기 전 비밀·원본 데이터 노출 여부를 점검한다.
 
 ## 프로젝트 구조

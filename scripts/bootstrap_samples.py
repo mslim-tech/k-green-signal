@@ -7,7 +7,7 @@
 #
 # 왜 복사인가: data/·outputs/ 는 .gitignore 로 추적하지 않는다(각자 데이터 → git 충돌 0).
 # 레퍼런스만 samples/ 에 커밋해 두고, 이 스크립트로 작업 폴더에 펼친다. 그러면 클론 후
-# 키 없이도 신호등 대시보드·RAG 검색이 바로 동작한다(답변 생성만 각자 OPENAI_API_KEY 필요).
+# 키 없이도 신호등 대시보드가 바로 동작한다(검색·답변 생성은 질문 임베딩부터 OPENAI_API_KEY 필요).
 #
 # 안전장치: 작업 폴더에 이미 파일이 있으면 덮어쓰지 않고 건너뛴다(자기 작업 보호).
 #           전부 레퍼런스로 초기화하려면  --force  를 준다.
@@ -66,7 +66,7 @@ def main() -> None:
 
     print("\n다음 단계:")
     print("  1) (선택) RAG 답변 생성을 쓰려면  cp .env.example .env  후 OPENAI_API_KEY 채우기")
-    print("  2) uv run streamlit run app.py     # 신호등 대시보드·검색은 키 없이도 동작")
+    print("  2) uv run streamlit run app.py     # 신호등 대시보드는 키 없이도 동작")
 
 
 if __name__ == "__main__":
