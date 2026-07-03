@@ -120,3 +120,19 @@ def test_blank_and_skip_excluded(tmp_path):
     ])
     rows = corrections.confirmed_only_rows([], path=cpath)
     assert not rows, "빈 값/skip 이 복원에 섞임"
+
+
+def test_llm_verified_applies_like_fixed(tmp_path):
+    """ 신규 status='llm_verified'(LLM 검증 확정)는 'fixed'처럼 값이 반영되고,
+        소스에 그 행이 없으면 복원(inject)도 되어야 한다 — 하이브리드 게이트 회귀 가드. """
+    cpath = tmp_path / "corrections.jsonl"
+    _write(cpath, [{
+        "year": "2025", "std_id": "X", "std_response_label": "L", "field": "value",
+        "old_value": "1", "new_value": "2", "status": "llm_verified",
+        "note": "원문 대조 일치", "reviewer": "llm:adjudicate", "ts": "2026-07-03T00:00:00",
+    }])
+    rows, n = corrections.apply_corrections(
+        [{"year": "2025", "std_id": "X", "std_response_label": "L", "value": "1"}], path=cpath)
+    assert n == 1 and rows[0]["value"] == "2"          # 오버레이(값 교체)
+    injected = corrections.confirmed_only_rows([], path=cpath)
+    assert injected and injected[0]["value"] == "2"    # 소스에 없으면 복원(inject)

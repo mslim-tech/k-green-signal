@@ -120,3 +120,51 @@ def test_summarize_and_categories():
     inds = signals.compute_signals(rows)
     assert signals.summarize(inds) == {"up": 1, "flat": 1, "down": 1}
     assert signals.categories(inds) == ["정책", "인지"]   # 정책 2 > 인지 1
+
+
+# --- 의사결정 프레이밍(집계 제외·척도변경 보류·거울상 중복제거) 회귀 가드 --------------
+# summarize/signaled_movers 의미가 '실제 변화만 계수'로 바뀐 것을 고정한다.
+
+def test_aggregation_label_excluded_from_movers_and_summary():
+    rows = [_row("m", 2024, "인지", 40.0), _row("m", 2025, "인지", 50.0),
+            _row("m", 2024, "기타", 10.0), _row("m", 2025, "기타", 30.0)]
+    inds = signals.compute_signals(rows, caveated_ids=set())
+    agg = next(s for s in inds[0].series if s.label == "기타")
+    assert agg.is_aggregate and agg.signal() is None       # 집계 라벨은 신호 없음
+    assert agg.block_reason == "집계·비응답 항목"
+    movers = signals.signaled_movers(inds)
+    assert [s.label for _, s in movers] == ["인지"]         # 헤드라인에서 제외
+    assert signals.summarize(inds) == {"up": 1, "flat": 0, "down": 0}
+
+
+def test_binary_mirror_counted_once():
+    # 이진 상보(합~100) 문항은 대표 1개(최신값 큰 쪽)만 계수 — 거울상 중복 방지.
+    rows = [_row("b", 2024, "인지", 40.0), _row("b", 2025, "인지", 55.0),
+            _row("b", 2024, "비인지", 60.0), _row("b", 2025, "비인지", 45.0)]
+    inds = signals.compute_signals(rows, caveated_ids=set())
+    assert inds[0].is_binary_mirror
+    movers = signals.signaled_movers(inds)
+    assert len(movers) == 1 and movers[0][1].label == "인지"
+    assert signals.summarize(inds) == {"up": 1, "flat": 0, "down": 0}
+
+
+def test_caveated_scale_break_blocks_signal():
+    # 척도변경 문항의 '23→'24 전이는 신호 보류(⚠️ 해석 유의) — 실제 추세로 오독 방지.
+    rows = [_row("c", 2023, "인지", 20.0), _row("c", 2024, "인지", 60.0)]
+    inds = signals.compute_signals(rows, caveated_ids={"c"})
+    s = inds[0].series[0]
+    assert s.caveat_break and s.signal() is None
+    assert s.block_reason == "척도 변경 구간"
+    assert signals.summarize(inds) == {"up": 0, "flat": 0, "down": 0}
+    assert [(i.std_id, sr.label) for i, sr in signals.caveat_breaks(inds)] == [("c", "인지")]
+    # 같은 데이터라도 척도변경 문항이 아니면 정상 신호 — caveat 게이트가 원인임을 고정.
+    s2 = signals.compute_signals(rows, caveated_ids=set())[0].series[0]
+    assert s2.signal() == "up"
+
+
+def test_max_abs_delta_ignores_aggregate_and_caveat():
+    # 지표 정렬 기준(max_abs_delta)도 집계·척도변경 시계열을 무시한다.
+    rows = [_row("x", 2024, "인지", 50.0), _row("x", 2025, "인지", 52.0),      # Δ2
+            _row("x", 2024, "기타", 10.0), _row("x", 2025, "기타", 40.0)]      # Δ30(집계)
+    ind = signals.compute_signals(rows, caveated_ids=set())[0]
+    assert ind.max_abs_delta == 2.0

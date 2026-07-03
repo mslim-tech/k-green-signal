@@ -83,3 +83,26 @@ def test_recover_step_result(monkeypatch, tmp_path):
     # pid 죽음 + 산출 없음 → 'fail'
     out.unlink()
     assert pipeline.recover_step_result(step, None, DEAD_PID, time.time()) == "fail"
+
+
+def test_is_fresh_extract_multi_pdf(monkeypatch, tmp_path):
+    """ extract 스킵 캐시(다중 PDF): '모든' PDF 산출이 각 원본보다 새로울 때만 스킵. """
+    _use_tmp(monkeypatch, tmp_path)
+    monkeypatch.setattr(pipeline, "DATA_DIR", tmp_path / "data")
+    (tmp_path / "data").mkdir()
+    step = pipeline.STEP_BY_KEY["extract"]
+    for name in ("a.pdf", "b.pdf"):
+        p = tmp_path / "data" / name
+        p.write_text("x")
+        os.utime(p, (1000, 1000))
+    out_a = tmp_path / "a.extracted.jsonl"
+    out_a.write_text("{}")
+    os.utime(out_a, (2000, 2000))
+    assert pipeline.is_fresh(step, ["a.pdf", "b.pdf"]) is False   # b 산출 없음 → 재실행
+    out_b = tmp_path / "b.extracted.jsonl"
+    out_b.write_text("{}")
+    os.utime(out_b, (2000, 2000))
+    assert pipeline.is_fresh(step, ["a.pdf", "b.pdf"]) is True    # 전부 최신 → 스킵
+    os.utime(tmp_path / "data" / "b.pdf", (3000, 3000))           # 원본이 더 새로워짐
+    assert pipeline.is_fresh(step, ["a.pdf", "b.pdf"]) is False   # 다시 추출 필요
+    assert pipeline.is_fresh(step, []) is False                   # PDF 미선택 → 스킵 불가

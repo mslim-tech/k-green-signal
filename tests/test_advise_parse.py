@@ -46,3 +46,12 @@ def test_parse_returns_none_without_headings():
 def test_parse_returns_none_with_single_branch():
     text = "### 💡 제언(추론)\n#### KEEP(유지)\n- 유지.\n"
     assert parse_advise_sections(text) is None
+
+
+def test_container_heading_prose_lands_in_preamble():
+    # '### 💡 제언(추론)' 바로 아래 서술은 버리지 않고 서문(preamble)으로 보존한다.
+    text = ("### 💡 제언(추론)\n컨테이너 아래 서술입니다.\n"
+            "#### KEEP(유지)\n- 유지.\n#### ADD(신설)\n- 신설.\n")
+    s = parse_advise_sections(text)
+    assert s is not None
+    assert "컨테이너 아래 서술입니다." in s.preamble
