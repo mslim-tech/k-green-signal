@@ -18,7 +18,8 @@
 | 3 | 신호등(키·인덱스 불필요한 최종 성과물)이 6단계 맨 뒤 — "클론 즉시 신호등"과 상충 | **3모드 IA**: 🚦 대시보드(정형 CSV 있으면 랜딩) · 💬 질의 · 🛠 데이터 준비(1~4단계 게이트 스텝퍼 유지). 제언 점프는 mode 전환으로 |
 | 4 | 검수: 행마다 선택→라디오(기본값 '값 고침'=변조성)→저장 반복, 원문 PDF 는 앱 밖 | **순차 검수 모드**(저장→자동 다음 행) + **원문 페이지 미리보기**(extract_vision 렌더러 재사용·dpi150·캐시, PDF 없으면 폴백) + 안전 기본값 '원래 값 맞음' + 행 키 위젯 키(입력 잔류 방지) |
 | 5 | advise 답변(KEEP/ADD/DROP/FIX)이 통짜 마크다운, 출처 클릭 불가 | 프롬프트 **헤딩 계약** + `parse_advise_sections`(합성 금지·실패 시 원문 폴백) → 갈래별 배지 카드. 출처는 카드(연도·std_id 배지·유사도)+**온디맨드 원문 페이지 토글**(PDF 있을 때만) |
-| 6 | RAG·검수 E2E 부재, eval 은 cite 6케이스뿐 | E2E +3(출처 카드 폴백·advise 구조화·순차 검수), 파서 단위 3, eval advise 골드 3(척도 FIX·인과 고지) + `run_eval.py` mode 지원. **단위 56 + E2E 21 = 77 passed** |
+| 6 | RAG·검수 E2E 부재, eval 은 cite 6케이스뿐 | E2E +3(출처 카드 폴백·advise 구조화·순차 검수), 파서 단위 3, eval advise 골드 3(척도 FIX·인과 고지) + `run_eval.py` mode 지원. **단위 56 + E2E 21 = 77 passed**. 실 LLM eval **8/9** — advise 신규 3건 전부 통과, 실패 1건은 기존 데이터 빵구(2023 환경표지_확대희망품목 1행만 추출 — PLAN '알려진 데이터 빵구' 참고, 이번 변경과 무관) |
+| 7 | UI 만 실제 `outputs/`를 읽는 경로 불일치(E2E 격리 우회) | `ui/common.py`가 `rag.core.paths.OUTPUT_DIR`(env `RAG_OUTPUT_DIR` 반영)를 쓰도록 통일 |
 
 커밋: `fix(app): align in-app actions with pipeline intent` → `feat(app): promote signal dashboard to landing with 3-mode IA` → `feat(review): sequential review mode with source-page preview` → `feat(rag): structured advise rendering and source cards`.
 
