@@ -1,4 +1,4 @@
-# rag/retriever.py
+# rag/retrieval/retriever.py
 # -----------------------------------------------------------------------------
 # 6.3 검색 (Retrieval)
 #
@@ -8,7 +8,7 @@
 #     → 답변(answer.py)이 이 결과만 근거로 쓰고 출처를 인용한다.
 #
 # 실행(단독 검색 테스트):
-#   uv run python rag/retriever.py "2023년에 확대되길 바라는 친환경제품 1위는?"
+#   uv run python -m rag.retrieval.retriever "2023년에 확대되길 바라는 친환경제품 1위는?"
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -18,16 +18,9 @@ import json
 import os
 from dataclasses import dataclass
 
-try:
-    from rag.extract import get_client
-    from rag.config import EMBEDDING_MODEL, RERANKER_MODEL
-    from rag.index import get_collection, embed_texts
-except ImportError:
-    from extract import get_client
-    from config import EMBEDDING_MODEL, RERANKER_MODEL
-    from index import get_collection, embed_texts
-
-
+from rag.ingest.extract import get_client
+from rag.core.config import RERANKER_MODEL
+from rag.retrieval.index import get_collection, embed_texts
 @dataclass
 class Hit:
     """ 검색 결과 한 건. """
@@ -98,11 +91,12 @@ def _rerank(query: str, hits: list[Hit], top_k: int) -> list[Hit]:
 
 def search(query: str, k: int = 5, year: str | None = None,
            fetch_k: int | None = None, rerank: bool = True,
-           std_id: str | None = None) -> list[Hit]:
+           std_id: str | None = None, parser_type: str | None = None) -> list[Hit]:
     """ 질문과 가까운 청크 top-k.
         rerank=True 면 벡터로 fetch_k 개를 넓게 뽑은 뒤 LLM 으로 재정렬해 상위 k 개를 돌려준다.
         (RAG_FAKE_LLM 이면 재정렬 생략 — 테스트 결정성). year 로 연도 필터 가능.
         std_id 를 주면 그 표로만 좁혀 검색한다(질문→표 라우팅이 명확한 표를 지정할 때).
+        parser_type 을 주면 그 청크 종류로만 좁힌다(예: 'methodology' 방법론 지식청크만).
     """
     use_rerank = rerank and not os.getenv("RAG_FAKE_LLM")
     fetch_k = fetch_k or (max(k * 4, 12) if use_rerank else k)
@@ -110,12 +104,14 @@ def search(query: str, k: int = 5, year: str | None = None,
     client = get_client()
     qvec = embed_texts(client, [query])[0]
 
-    # 연도·표 필터를 Chroma where 로 묶는다(둘 다면 $and).
+    # 연도·표·청크종류 필터를 Chroma where 로 묶는다(여럿이면 $and).
     conds = []
     if year:
         conds.append({"year": str(year)})
     if std_id:
         conds.append({"std_id": std_id})
+    if parser_type:
+        conds.append({"parser_type": parser_type})
     where = conds[0] if len(conds) == 1 else ({"$and": conds} if conds else None)
     col = get_collection()
     res = col.query(

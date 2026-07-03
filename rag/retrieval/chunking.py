@@ -1,4 +1,4 @@
-# rag/chunking.py
+# rag/retrieval/chunking.py
 # -----------------------------------------------------------------------------
 # 6.1 청킹 (Chunking)
 #
@@ -14,7 +14,7 @@
 #     year, std_id, std_label
 #
 # 실행:
-#   uv run python rag/chunking.py        # outputs/chunks.jsonl 생성 + 요약 출력
+#   uv run python -m rag.retrieval.chunking        # outputs/chunks.jsonl 생성 + 요약 출력
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -25,11 +25,10 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-try:
-    from rag import corrections, std_aliases
-except ImportError:
-    import corrections, std_aliases
-
+from rag.curate import corrections
+from rag.curate import methodology
+from rag.curate import external_context
+from rag.transform import std_aliases
 try:
     import tiktoken
     _ENC = tiktoken.get_encoding("cl100k_base")
@@ -37,10 +36,7 @@ except Exception:
     _ENC = None
 
 
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
+from rag.core.paths import OUTPUT_DIR
 # dedup(4.2) 결과를 우선 입력으로 (없으면 clean). flagged 도 가능하지만 값은 동일.
 _DEDUP = OUTPUT_DIR / "standardized_long.dedup.csv"
 _CLEAN = OUTPUT_DIR / "standardized_long.clean.csv"
@@ -93,6 +89,9 @@ def build_chunks(rows: list[dict]) -> list[dict]:
 
     chunks: list[dict] = []
     for (year, std_id), members in groups.items():
+        # std_id 가 비면(미매핑) None 이 될 수 있다. Chroma 메타는 None 을 거부해
+        # 인덱스 빌드 전체가 실패하므로 문자열로 강제한다(빈 문자열 허용).
+        std_id = std_id or ""
         head = members[0]
         std_label = head.get("std_label") or std_id
         summary = head.get("question_summary") or ""
@@ -130,6 +129,9 @@ def build_chunks(rows: list[dict]) -> list[dict]:
             f"응답(전체 기준):\n" + "\n".join(lines)
         )
 
+        if not lines:
+            continue   # 값 있는 응답이 하나도 없는 문항은 색인하지 않는다(빈 청크 제외).
+
         warnings = sorted({(m.get("warning") or "").strip() for m in members if (m.get("warning") or "").strip()})
         chunk_id = f"{year}__{std_id}"
         chunks.append({
@@ -151,6 +153,83 @@ def build_chunks(rows: list[dict]) -> list[dict]:
     return chunks
 
 
+def build_knowledge_chunks() -> list[dict]:
+    """ 큐레이션된 '방법론 주석'을 지식청크로 만든다(parser_type='methodology').
+        정형 사실 청크와 섞이지 않게 별도 타입으로 인덱싱한다 — RAG 가 척도 변경 등
+        '비교 유의'를 근거로 쓸 수 있게 한다("추측"이 아니라 사람 확정 지식이라 인덱싱). """
+    chunks: list[dict] = []
+    for i, n in enumerate(methodology.load_notes()):
+        std_id = (n.get("std_id") or "").strip()
+        std_label = n.get("std_label") or std_id
+        note = (n.get("note") or "").strip()
+        evidence = (n.get("evidence") or "").strip()
+        if not note:
+            continue
+        text = f"[방법론 주석] {std_label}\n{note}"
+        if evidence:
+            text += f"\n근거: {evidence}"
+        chunk_id = f"methodology__{std_id or i}"
+        chunks.append({
+            "id": chunk_id,
+            "text": text,
+            "metadata": {
+                "chunk_id": chunk_id,
+                "year": "",
+                "std_id": std_id,
+                "std_label": std_label,
+                "source": "방법론 주석(큐레이션)",
+                "page": "",
+                "parser_type": "methodology",
+                "token_count": count_tokens(text),
+                "warning": "",
+                "n_responses": 0,
+            },
+        })
+    return chunks
+
+
+def build_external_context_chunks() -> list[dict]:
+    """ 큐레이션된 '외부 맥락'(그해 뉴스·사회적 사건)을 지식청크로(parser_type='external_context').
+        RAG(특히 advise)가 데이터 변화를 그해 사건과 대조해 '상황 적응형 해석'을 하게 한다
+        — 상관·맥락일 뿐 인과 단정 아님(프롬프트가 강제). 정형 사실 청크와 섞이지 않는다. """
+    chunks: list[dict] = []
+    for i, e in enumerate(external_context.load_events()):
+        title = (e.get("title") or "").strip()
+        year = str(e.get("year") or "").strip()
+        source = (e.get("source") or "").strip()
+        if not title:
+            continue
+        match = ", ".join(e.get("match", []))
+        text = f"[외부 맥락 {year}] {title}"
+        if match:
+            text += f"\n관련 주제: {match}"
+        chunk_id = f"external_context__{year}_{i}"
+        chunks.append({
+            "id": chunk_id,
+            "text": text,
+            "metadata": {
+                "chunk_id": chunk_id,
+                "year": year,
+                "std_id": "",
+                "std_label": title[:60],
+                "source": source or "외부 맥락(큐레이션)",
+                "page": "",
+                "parser_type": "external_context",
+                "token_count": count_tokens(text),
+                "warning": "",
+                "n_responses": 0,
+                "url": (e.get("url") or "").strip(),
+            },
+        })
+    return chunks
+
+
+def build_all_chunks(rows: list[dict]) -> list[dict]:
+    """ 인덱스에 실제로 넣을 전체 청크 = 정형 사실 청크 + 방법론 지식청크 + 외부 맥락 지식청크.
+        (게이트 validate 는 사실 청크만 build_chunks 로 검사하므로 영향 없음.) """
+    return build_chunks(rows) + build_knowledge_chunks() + build_external_context_chunks()
+
+
 def save_chunks(chunks: list[dict]) -> Path:
     OUTPUT_DIR.mkdir(exist_ok=True)
     with open(CHUNKS_JSONL, "w", encoding="utf-8") as f:
@@ -164,7 +243,7 @@ def load_chunks() -> list[dict]:
     if CHUNKS_JSONL.exists():
         with open(CHUNKS_JSONL, "r", encoding="utf-8") as f:
             return [json.loads(line) for line in f if line.strip()]
-    chunks = build_chunks(load_rows())
+    chunks = build_all_chunks(load_rows())
     save_chunks(chunks)
     return chunks
 
@@ -176,13 +255,17 @@ def main() -> None:
         pass
 
     rows = load_rows()
-    chunks = build_chunks(rows)
+    fact_chunks = build_chunks(rows)
+    know_chunks = build_knowledge_chunks()
+    ctx_chunks = build_external_context_chunks()
+    chunks = fact_chunks + know_chunks + ctx_chunks
     path = save_chunks(chunks)
 
     n_tok = sum(c["metadata"]["token_count"] for c in chunks)
-    empty = sum(1 for c in chunks if c["metadata"]["n_responses"] == 0)
+    empty = sum(1 for c in fact_chunks if c["metadata"]["n_responses"] == 0)
     print("\n" + "=" * 60)
-    print(f"청킹 완료 — {len(chunks)} 청크 ({SOURCE_CSV.name} 기준, corrections 반영)")
+    print(f"청킹 완료 — {len(chunks)} 청크 (사실 {len(fact_chunks)} + 방법론 지식 {len(know_chunks)} "
+          f"+ 외부 맥락 {len(ctx_chunks)}, {SOURCE_CSV.name} 기준, corrections 반영)")
     print(f"  총 토큰(대략): {n_tok:,} | 평균 {n_tok // max(1,len(chunks))}/청크")
     if empty:
         print(f"  ⚠️ 응답 줄이 0인 청크: {empty}개 (값이 다 빈 문항 — 검수 대상)")
