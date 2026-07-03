@@ -1,7 +1,65 @@
-# 작업 로그 (logging.md)
+# 작업 로그 (LOGGING.md)
 
 > 사용자 요청과 그에 대한 작업 내용을 날짜별로 정리하는 파일.
 > "내가 무엇을 요청했고, 무엇이 어떻게 처리됐는지"를 추적한다.
+
+---
+
+## 2026-07-03
+
+방법론 지식 인덱싱 + '데이터 기반 제언' 모드 + 신호등 의사결정 프레이밍 세션. 척도 변경(예: 인지도 2023 4점→2024~ 2점) 아티팩트를 실제 추세로 오독하던 문제를 데이터·지식·UI 세 층에서 해소하고, `app.py`를 `ui/` 패키지로 분리 착수.
+
+### 요청 → 대응 요약
+
+| # | 사용자 요청 | 대응 / 결과 |
+|---|---|---|
+| 1 | 척도 변경을 실제 추세로 오독하는 문제 | `curation/methodology_notes.json`(사람 확정 '비교 유의' 지식, 척도 변경 6지표) + `rag/curate/methodology.py`(단일 로더: `load_notes`·`caveats_by_std_id`). 청킹·앱 캡션이 이 한 파일을 공용(드리프트 방지). |
+| 2 | 그 지식을 RAG가 근거로 쓰게 | `chunking.build_knowledge_chunks()`가 `parser_type="methodology"` 지식청크 생성 → `build_all_chunks()`(사실+지식)로 **함께 인덱싱**. 게이트는 사실 청크만 검사(`build_chunks`)라 지식청크 오인 없음. **사실 196 + 방법론 6 + 외부 맥락 16 = 218 청크.** |
+| 3 | '데이터 기반 제언' 모드 | `answer(mode="advise")` — `_advise_retrieve` 다면검색(추세 + 장벽/개선 + 방법론 지식청크 필터로 반드시 포함, chunk_id 병합·중복제거). 프롬프트가 KEEP/ADD/DROP/FIX 강제, 💡제언 위·📊근거 아래, 실제 파일명 인용, 척도 변경은 FIX 대상. `retriever.search`에 `parser_type` 필터 추가. |
+| 4 | 답변 길이 조절 | 상세도 `요약/표준/상세`(`DETAIL_GUIDE`) — 같은 근거로 서술 길이·깊이만(프롬프트 지침, 토큰 상한 불변). cite·advise 공통. |
+| 5 | 신호등을 의사결정 도구로 | `signals.py`: 집계·비응답 라벨 제외, 2023→2024 척도경계 신호 보류(`caveat_break`), 이진 상보 중복 제거(`is_binary_mirror`). 신규 API `signaled_movers`·`caveat_breaks`·`spans_scale_break`. `ui/signal.py`: 헤드라인 '📊 주목할 실제 변화'(2024→2025 설계 동일 구간만), '⚠️ 해석 유의'로 개편·척도 변경 분리, '💡 2026 설문 설계 제언 받기'→advise 연결. |
+| 6 | 추세 차트 눈금 중복 | 연도 축 quantitative→**ordinal(`연도:O`)** 전환(중복 눈금 해소), 없는 연도는 선 끊김(null 갭, 가짜 보간 없음), 범례 `labelLimit=0`(라벨 잘림 해소). |
+| 7 | `app.py` 비대 → 모듈화 | 단계·탭 화면을 `ui/` 패키지로 전량 추출: `signal`(895)·`review`(426)·`ingest`(355)·`rag`(107)·`index`(56)·`common`(18)행. **app.py 1935→309행**(셸: 라우팅·스텝퍼·상태/로그 패널). 한 모듈씩 ruff 0·전체 68 passed(신규 실패 0)로 동작 보존. `__file__` 상대경로 버그(외부맥락)·`logger` 누락·미사용 import까지 수정. |
+| 8 | 질문 재작성(6.4)·예시 질문(6.7) | `answer.rewrite_query()`(`REWRITE_MODEL`) — 검색어만 정규화·확장(recall↑), 연도·라우팅·표시는 원 질문 유지, `Answer.rewritten`로 투명 노출, RAG 탭 체크박스. `answer.suggest_questions()`(`EXAMPLE_Q_MODEL`) — 인덱싱된 실제 문항 씨앗으로 '답할 수 있는' 추천 질문, RAG 탭 클릭→채움. FAKE·실패 시 결정적 폴백. 실 LLM 검증: '그린카드 아는 사람'→'그린카드 인지도 인지 여부 알고 있음 비율'. |
+| 9 | 클론 즉시 재현(하이브리드) | 산출물(정형 CSV·청크·**Chroma 인덱스**)을 **작업 폴더와 분리해 `samples/`에 커밋**(재사용자 충돌 0). 원본 PDF는 용량상 제외(`samples/data/*.pdf` ignore, 공개 official 보고서 — 출처는 `samples/data/README.md`; 커밋 규모 9.0MB/35파일). `scripts/bootstrap_samples.py`가 `samples/`→`data/·outputs/` 펼침(기존 파일 보호 skip / `--force`). `.gitignore` 루트 고정(`/data/`·`/outputs/`)으로 `samples/` 하위만 추적. `.env`는 항상 제외. 커밋될 인덱스가 실제 쿼리됨 검증(키 없이 대시보드·검색 동작). |
+| 10 | 신호등 의사결정·가독성 고도화 | 헤드라인 **3단 분리**: 🟢설계동일+크기정상(|Δ|≤`LARGE_YOY_PP`=15) · 🔶설계동일이나 이례적 급변(>15%p, 검증 필요) · ⚠️개편·척도변경. 근거: 설계동일 |Δ| 중앙값 6.6%p·>15%p는 상위 10%(실측). 카드 잘림 해소(`_mover_card` 테두리·전체 라벨). 단일연도 문항(판단 기준·구매 장벽)은 **그 해 스냅샷(파레토)**으로(`_render_single_year_snapshot`), '행동 동기·장애' 섹션도 단일연도 raw 폴백(`_raw_top1`). 실렌더 스크린샷 검증, e2e 70 passed(기존 실패 2건 해소). 방법론 노트의 물결표(`'24~는`·`82.2%~`)가 Streamlit(remark-gfm)에서 `~…~` 취소선으로 먹혀 '2024 2점척도=82.2%' 핵심 설명이 지워진 듯 렌더되던 버그를 `_md_escape`(캡션 렌더 시 마크다운 특수문자 이스케이프)로 수정. |
+| 11 | 외부 맥락 RAG 통합(변곡점 해석) | '변곡점×외부맥락'이 대시보드 전용이라 advise가 사건을 몰라 해석이 상황에 안 맞던 문제 해소. `curation/external_context.json`→`rag/curate/external_context.py`→`build_external_context_chunks()`(`parser_type="external_context"`, 16건) 인덱싱(**196+6+16=218 청크**), `_advise_retrieve`에 외부맥락 facet, 프롬프트가 데이터×사건 상황 해석(상관·인과 구분) 강제. 실 LLM 검증: '2023→2024 신뢰 상승 ↔ 그린워싱 이슈(상관·인과 아님)'. 대시보드는 겹침 연도 vs 설문 이전 배경 분리(‘데이터 없음’ 노이즈 제거) + advise 안내. samples 인덱스 갱신. 근본 제약(2023~25 3개년, 깨끗한 전이 1개)은 정직 명시 — 옛 연도 인제스트가 선결(백로그 D). |
+| 12 | 커밋 전 게이트: 실패 테스트 해결 + samples 정책 확정(Option A) | **실패 테스트 재조준**: `test_restore.py`가 지키던 시나리오(2023 표 3-60 누락→corrections 복원)가 소멸 — 추출 개선으로 그 표는 이제 **소스에서 직접**(page 74, 보일러 6.1) 나오고 corrections에서 제거됨(데이터 개선). 죽은 특정 표 대신 **그 시점 실제로 복원되는 확정값 전부**(2023 환경문제_관심도·환경표지_우선구매의향)가 ⓐ빈칸 안 지어내고 ⓑ청크까지 도달하는지로 재작성(`test_confirmed_corrections_reach_index`, 복원 대상 없으면 fail 아닌 skip). **71 passed**. **samples 정책(Option A)**: `samples/outputs`(CSV·청크·**Chroma 인덱스**)는 커밋해 '키 없이 검색' 보장, 원본 PDF(44MB)는 `.gitignore: samples/data/*.pdf`로 제외(출처 `samples/data/README.md`). 근거: Chroma 5.8MB로 검색 유지 > PDF는 보기에 불필요. dry-run **9.0MB/35파일/PDF 0**. drift 3곳(README·CLAUDE·LOGGING) 정정. |
+
+### 신규/변경 파일
+- 신규: `curation/methodology_notes.json`, `curation/external_context.json`, `rag/curate/methodology.py`, `rag/curate/external_context.py`, `ui/`(`signal.py`·`review.py`·`ingest.py`·`rag.py`·`index.py`·`common.py`·`__init__.py`), `scripts/bootstrap_samples.py`, `samples/`(레퍼런스 CSV·청크·Chroma + `data/README.md`), `tests/test_corrections_inject.py`.
+- 주요 수정: `rag/retrieval/{chunking,answer,retriever}.py`(지식청크·외부맥락·advise·parser_type 필터·질문 재작성·예시 질문), `rag/signals.py`(의사결정 규칙·`LARGE_YOY_PP`), `app.py`(ui/ 분리·advise 배선), `tests/test_restore.py`(복원 계약으로 재조준), `.gitignore`(`samples/data/*.pdf` 제외).
+
+---
+
+## 2026-07-02
+
+프로젝트 위생·정합성 강화 세션. 폴더 재구성, 정합성 리뷰(멀티 에이전트) → 버그 수정, `rag/` 서브패키지화.
+
+### 요청 → 대응 요약
+
+| # | 사용자 요청 | 대응 / 결과 |
+|---|---|---|
+| 1 | 설계·기록 `.md`를 폴더로 | `docs/`(ARCHITECTURE·DECISIONS·PLAN·LOGGING) 이동, 참조 갱신. README/CLAUDE는 루트 유지. |
+| 2 | `mapping_review.csv`·`external_context.json`도 폴더로 | 처음 `config/`로 옮겼다가, "설정 아님(사람 큐레이션 참조 데이터)"이라는 지적 반영 → **`curation/`** 으로 재명명. 코드 참조 2곳(app.py·integrate_oldyears) + 문서 갱신. |
+| 3 | 시스템 동작 확인 / 로깅 엄밀화 | 인제스트 각 단계 산출 집계를 run 로그에 남기도록 보강. 앱 렌더 로그 dedupe. |
+| 4 | 인제스트 완료 후 검수로 안 넘어감 | 원인: `@st.fragment(run_every=2)`가 fragment만 rerun → 종료 전이에서 `st.rerun(scope="app")`로 메인 재빌드. optional 단계 non-blocking 처리. |
+| 5 | 비전으로 빈칸 회수, 사람 검수는 최후에 (놓치지 않게) | `refill_vision`(CANDIDATE_MODE) → `vision_candidates.csv` → 검수 탭 확정 → `corrections.confirmed_only_rows` inject 경로. 게이트가 미확정 후보를 차단. |
+| 6 | 리터 경고(Ruff+cSpell) 파일별 말고 설정으로 | `pyproject [tool.ruff]`·`cspell.json`(도메인 사전) 도입. Ruff 20→0, cSpell 0. 로거명 `log`→`logger` 전면 표준화. |
+| 7 | A2 refine 병렬화 · B1 print→logging | `refine.build_label_map`을 `ThreadPoolExecutor(8)`로 병렬화(순차 4.8s→0.61s, 항등 안전망·단일라벨 skip 검증). extract·standardize·flags·review에 구조화 로깅 추가(print 유지). |
+| 8 | README 전문화(기술스택 상단·모듈구조·mermaid) | 배지 12개 상단 이동, 모듈 구조·mermaid 갱신. `main.py`(미사용 stub) 삭제. |
+| 9 | 이미 구현된 모듈들 정합성 검토 — 엄밀하게 | `rag/` 전 모듈을 5개 클러스터로 나눠 멀티 에이전트 리뷰. 실제 결함 6건 + 방어개선 다수 발견, 검증된 정상(refine 병렬화·refill CANDIDATE·signals YoY·validate 게이트·taskkill 무해) 확인. |
+| 10 | 결함 6건 전부 수정 | ①비전 old-table을 medium+warning으로(검수 우회 차단) ②integrate side-channel을 validate 새 검사로 차단 ③`_detect_year` 수량·화폐 오인 방지 ④chunking std_id None→"" (index 크래시 방지) ⑤corrections 출처 페이지 미상시 빈칸(허위 인용 방지) ⑥dedup 과잉병합 distinct 항목 드롭 방지. 재현 테스트 8건 추가(단위 52 passed). |
+| 11 | `config.py` 모델 적절성 검토 | OpenAI models API **실측**: `gpt-5.4-mini`는 최신(gpt-5.5)보다 한 버전 뒤로 낡지 않음. `temperature=0`·Structured Outputs 정상 작동 확인. 필수 교체 없음(정밀도 원하면 추출/비전만 상향 옵션). |
+| 12 | `rag/` 서브패키지화(엄밀 모듈화) | flat 25파일 → `core/ingest/transform/curate/retrieval` 서브패키지 + 최상위 `signals`·`pipeline`. 실행모델 path→`python -m`, dual-import 제거·단일 절대 import, pipeline 서브프로세스·CLI·문서 갱신. Ruff 0, 단위 52 passed. |
+| 13 | docs 대문자 통일 + 내용 갱신 | `plan.md`→`PLAN.md`·`logging.md`→`LOGGING.md`. CLI·경로·모듈구조·이 로그 반영. |
+| 14 | 재구조화 후 e2e ingest 2건 실패 — 근본 원인까지 | **근본 원인: 테스트 하네스 macOS 버그.** `conftest`의 `_free_port`·teardown 이 Windows `netstat`/`taskkill` 만 써서 macOS 에선 포트 8599 의 stale streamlit 서버(재구조화 이전 코드, `python rag/extract.py` 실행 → 파일 없음 rc=2)를 못 죽이고 매 세션 재사용. `-m` 코드 자체는 정상. conftest 를 **크로스플랫폼(lsof+kill)** 으로 수정 → ingest e2e **3/3 통과**, vision_oldtable ERROR·teardown ERROR 도 해소. 남은 8건(rag·signal·stepper)은 세션 시작 전부터 있던 pre-existing(단일연도·fake 모드). |
+| 15 | outputs/ 데이터 훼손 복구 | 진단 중 `RAG_FAKE_LLM`+`--save` 를 실제 `outputs/` 에 실행해 스텁값으로 덮어쓴 실수 → **실제 LLM 로 재구축**(extract 104s·standardize 15s·refine 16s). dedup 197행·실제값 복원. `corrections.jsonl` 없어 사람 확정 손실 없음. (교훈: 진단은 `RAG_OUTPUT_DIR` 격리.) |
+
+### 신규/변경 파일
+- 신규: `curation/`(이동), `tests/test_bugfixes.py`, `cspell.json`, 서브패키지 `rag/{core,ingest,transform,curate,retrieval}/`.
+- 삭제: `main.py`(미사용 stub).
+- 주요 수정: `rag/curate/validate.py`(side-channel 차단 검사 5), `rag/ingest/extract_vision_oldtable.py`·`rag/retrieval/{answer,chunking}.py`·`rag/curate/corrections.py`·`rag/transform/{refine,dedup}.py`(버그 수정), `rag/pipeline.py`(`-m` 실행), README/CLAUDE/docs.
 
 ---
 
@@ -35,7 +93,7 @@
 
 ### 오늘 만든/바꾼 것 (코드)
 - 신규: `rag/corrections.py`, `rag/extract_vision.py`, `rag/refill_vision.py`(candidate 모드), `rag/chunking.py`, `rag/index.py`, `rag/retriever.py`, `rag/answer.py`, `rag/logging_setup.py`, `rag/validate.py`, `rag/pipeline.py`, `ARCHITECTURE.md`, `tests/e2e/*`(conftest·smoke·fixture).
-- 수정: `app.py`(검수·RAG 탭, 다중 업로드, 로깅 연결), `rag/dedup.py`(section 매칭), `README.md`, `plan.md`, `pyproject.toml`(dev: pytest·playwright + pytest 설정), `.gitignore`(logs/·test-results/).
+- 수정: `app.py`(검수·RAG 탭, 다중 업로드, 로깅 연결), `rag/dedup.py`(section 매칭), `README.md`, `PLAN.md`, `pyproject.toml`(dev: pytest·playwright + pytest 설정), `.gitignore`(logs/·test-results/).
 
 ### 가이드 스텝퍼 재설계 — 증분 진행 상황
 - [x] 1. 로깅 인프라(`logging_setup.py`, UTF-8 파일+콘솔, 멱등) — 유닛 검증.

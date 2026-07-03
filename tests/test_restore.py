@@ -1,13 +1,21 @@
 # tests/test_restore.py
 # -----------------------------------------------------------------------------
-# 결정적(LLM 없는) 단위 검증: 추출이 깨져 드롭됐지만 사람이 확정한 표(2023 표 3-60
-# '친환경제품 확대 희망')가 corrections → chunking 으로 인덱스용 청크에 복원되는지.
+# 결정적(LLM 없는) 단위 검증: 사람이 확정한 값(corrections)이 지어냄 없이
+# 인덱스용 청크까지 '복원'되는지.
 #
 #   왜 결정적인가: corrections.jsonl + chunking 은 순수 데이터 변환이라 LLM 변동이
 #   없다. 사용자의 검수 노력이 인덱스에 반영되는지를 회귀로 단단히 지킨다.
-#   (실제 검색/답변의 표 구분은 LLM 변동이 있어 별도 — eval 은 안정적 질문만 게이트.)
+#
+#   무엇을 지키나(특정 표에 묶지 않는다): confirmed_only_rows 가 '소스에 대응 행이
+#   없는' 확정값만 복원하고 — (a) 표 통째 누락, (b) 기존 표의 새 응답라벨 — 그 값이
+#   빈칸을 지어내지 않고(‘값 있는 행만’) 청크 본문까지 도달하는지.
+#   과거엔 2023 표 3-60('친환경제품 확대 희망')이 대표 사례였으나, 추출 개선으로
+#   그 표는 이제 소스에서 직접 나온다(page 74). 그래서 테스트는 특정 표가 아니라
+#   '그 시점에 실제로 복원되는 확정값 전부'의 계약을 지킨다. 복원할 확정값이 없으면
+#   (모두 소스에 흡수됨) 지킬 대상이 없으므로 실패가 아니라 skip 한다.
 # -----------------------------------------------------------------------------
 
+import csv
 import sys
 from pathlib import Path
 
@@ -22,39 +30,32 @@ CORRECTIONS = PROJECT_ROOT / "outputs" / "corrections.jsonl"
 
 @pytest.mark.skipif(not CORRECTIONS.exists(),
                     reason="outputs/corrections.jsonl 없음 — 로컬 검수 데이터 필요")
-def test_table_3_60_restored_from_corrections():
-    from rag import corrections, chunking
+def test_confirmed_corrections_reach_index():
+    from rag.curate import corrections
+    from rag.retrieval import chunking
 
-    # 1) 소스 CSV 에는 없어야 한다(추출 깨져 드롭된 표). 복원은 (year, std_id) 단위라
-    #    2023 표 3-60 의 키만 부재하면 된다(옛 연도 통합으로 같은 std_id 의 2016/2017
-    #    '확대희망' 행은 소스에 있지만 2023 표 3-60 은 여전히 corrections 에만 있음).
+    # 소스 CSV 로드(있으면). confirmed_only_rows 는 '이 소스에 대응 행이 없는' 확정값만 복원한다.
     src_rows = []
     if chunking.SOURCE_CSV.exists():
-        import csv
         with open(chunking.SOURCE_CSV, encoding="utf-8-sig", newline="") as f:
             src_rows = list(csv.DictReader(f))
-    assert not any(r.get("std_id") == "친환경제품_확대희망품목" and r.get("year") == "2023"
-                   for r in src_rows), \
-        "2023 표 3-60 이 소스 CSV 에 이미 있음 — 이 테스트 전제(누락)와 다름"
 
-    # 2) confirmed_only_rows 가 사람 확정값으로 그 표를 복원해야 한다.
     restored = corrections.confirmed_only_rows(src_rows)
-    t360 = [r for r in restored if r.get("std_id") == "친환경제품_확대희망품목"]
-    assert t360, "표 3-60 이 corrections 에서 복원되지 않음"
+    if not restored:
+        pytest.skip("복원 대상 확정값이 없음 — 모든 corrections 가 소스에 흡수됨(지킬 대상 없음)")
 
-    # 보일러 6.1% 가 확정값으로 들어와야 한다(사람 확정 핵심값).
-    by_label = {r["std_response_label"]: r["value"] for r in t360}
-    assert by_label.get("친환경적인 보일러") == "6.1", \
-        f"보일러 확정값(6.1)이 복원 안 됨: {by_label.get('친환경적인 보일러')!r}"
+    # 1) 지어내지 않는다: 복원 행은 모두 값이 있어야 한다(빈 값 금지).
+    assert all((r.get("value") or "").strip() for r in restored), "빈 값 행이 복원에 섞임"
 
-    # 값 없는(빈) 라벨은 복원에서 제외돼야 한다(지어내지 않음).
-    assert all((r.get("value") or "").strip() for r in t360), "빈 값 행이 복원에 섞임"
-
-    # 3) chunking 이 그 표를 (year, std_id) 청크로 만들어야 한다.
+    # 2) 복원된 (year, std_id) 는 인덱스용 청크로 만들어져야 한다(검수 노력이 인덱스에 도달).
     chunks = chunking.build_chunks(chunking.load_rows())
-    ids = {c["id"] for c in chunks}
-    assert "2023__친환경제품_확대희망품목" in ids, "복원된 표가 청크에 없음"
+    by_id = {c["id"]: c for c in chunks}
+    for r in restored:
+        cid = f"{r['year']}__{r['std_id']}"
+        assert cid in by_id, f"복원된 표가 청크에 없음: {cid}"
 
-    # 청크 본문에 보일러 6.1% 가 보여야 한다(검색·인용 대상).
-    chunk = next(c for c in chunks if c["id"] == "2023__친환경제품_확대희망품목")
-    assert "친환경적인 보일러: 6.1%" in chunk["text"], "청크 본문에 보일러 6.1% 없음"
+    # 3) 복원 값이 그 청크 본문에 실제 표기(‘라벨: 값%’)로 보여야 한다(검색·인용 대상).
+    for r in restored:
+        cid = f"{r['year']}__{r['std_id']}"
+        needle = f"{r['std_response_label']}: {r['value']}%"
+        assert needle in by_id[cid]["text"], f"청크 본문에 복원값 없음: {cid} / {needle!r}"

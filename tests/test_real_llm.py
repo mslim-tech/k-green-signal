@@ -40,7 +40,7 @@ def test_real_answer_grounds_and_cites(monkeypatch):
         if not os.getenv("OPENAI_API_KEY"):
             pytest.skip("OPENAI_API_KEY 없음 — 실제 LLM 검증 skip")
 
-    from rag.answer import answer
+    from rag.retrieval.answer import answer
 
     # 안정적인 단일 사실 질문으로 실제 경로(연도 자동감지 → 검색 → 근거인용)를 검증한다.
     #   원문: 2024 그린카드 인지도 = '알고 있다' 62.6% (p.107-108).

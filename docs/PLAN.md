@@ -1,4 +1,4 @@
-# k-green-signal 진행 계획 (plan.md)
+# k-green-signal 진행 계획 (PLAN.md)
 
 > 프로젝트: **대한민국 친환경 소비 인지도 실시간 신호등 (k-green-signal)**
 > 목표: 「친환경 생활·소비 국민 인지도 조사」 결과보고서(총 14개년: 2007, 2013~2025)를
@@ -12,29 +12,40 @@
 > **비전 추출**(`extract_vision.py`, 깨진 표 복원 → 검토 후보 라우팅) ·
 > **6단계 RAG 기본**(청킹→Chroma 인덱싱→검색→근거 인용 답변, `app.py` RAG 탭).
 >
-> **앱 재설계 완료(2026-06-26)**: `app.py`를 **가이드 스텝퍼**(업로드→인제스트→검수→(엄격 게이트)→인덱싱→**단일 RAG Q&A**)로 재작성. 🩺 시스템 로그 패널·단계별 진행/소요시간·데이터 상태 패널. 검증 하네스: `rag/logging_setup.py`·`rag/validate.py`·`rag/pipeline.py` + **Playwright `tests/e2e` 7 passed**. (`RAG_FAKE_LLM`로 결정적). 상세 로그는 [`logging.md`](./logging.md).
+> **앱 재설계 완료(2026-06-26)**: `app.py`를 **가이드 스텝퍼**(업로드→인제스트→검수→(엄격 게이트)→인덱싱→**단일 RAG Q&A**)로 재작성. 🩺 시스템 로그 패널·단계별 진행/소요시간·데이터 상태 패널. 검증 하네스: `rag/core/logging_setup.py`·`rag/curate/validate.py`·`rag/pipeline.py` + **Playwright `tests/e2e` 7 passed**. (`RAG_FAKE_LLM`로 결정적). 상세 로그는 [`LOGGING.md`](./LOGGING.md).
+>
+> **정합성·구조 강화(2026-07-02)**: 멀티 에이전트 정합성 리뷰로 결함 6건 수정(비전 검수 우회·integrate 게이트 우회·연도 오인·index None 크래시·출처 페이지·dedup 드롭) + 재현 테스트 8건. `refine` 스레드풀 병렬화. 폴더 재구성(`docs/`·`curation/`), 로거 표준화, `main.py` 삭제. **`rag/`를 서브패키지(`core/ingest/transform/curate/retrieval`)로 재편**(실행 `python -m rag.<pkg>.<mod>`). 단위 **52 passed**, Ruff 0.
 >
 > ### 설계 원칙: "추측은 데이터가 아니다"
 > 문서에 실제 있는 것만 출처와 함께 DB에. LLM·휴리스틱의 불확실 판단은 검토 후보로만(자동 반영 금지),
 > 사람이 출처 보고 `corrections.jsonl`로 확정. 답변은 grounding에 근거(근거 없으면 "찾을 수 없음").
 >
 > **6단계 세부**:
-> - [x] 6.1 `chunking.py` — (year, std_id) 단위 사실 청크, 출처 메타 + corrections 반영. 198 청크.
+> - [x] 6.1 `chunking.py` — (year, std_id) 단위 사실 청크 + **방법론 지식청크**(`parser_type="methodology"`), 출처 메타 + corrections 반영. **사실 196 + 방법론 지식 6 + 외부 맥락 16 = 218 청크**(게이트는 사실 청크만 검사).
 > - [x] 6.2 `index.py` — `text-embedding-3-small` → Chroma(`outputs/chroma/`, cosine).
-> - [x] 6.3 `retriever.py` — 벡터 top-k 검색(연도 필터), 유사도·출처 반환.
-> - [x] 6.6 `answer.py`/app.py — 검색 청크만 근거로 **출처 인용** 답변, 없으면 "찾을 수 없음".
+> - [x] 6.3 `retriever.py` — 벡터 top-k 검색(연도·std_id·**parser_type 필터**), 유사도·출처 반환.
+> - [x] 6.6 `answer.py`/app.py — 검색 청크만 근거로 **출처 인용** 답변, 없으면 "찾을 수 없음". **두 모드**(`cite` 사실 인용 · `advise` 데이터 기반 제언: 다면검색+KEEP/ADD/DROP/FIX+방법론 주석 반영) + **상세도**(요약/표준/상세).
 > - [x] 6.5 rerank(`RERANKER_MODEL`, listwise) — 정답 청크 5위→1위 확인. + 순위 질문 시 집계항목(기타/없음/무응답) 제외하도록 `answer.py` 프롬프트 보강.
-> - [ ] 6.4 질문 재작성(`REWRITE_MODEL`) — recall 개선
-> - [ ] 6.8 `eval/` — 검색·인용 품질 평가 질문셋
+> - [x] 🚦 신호등 의사결정 프레이밍(`signals.py`+`ui/signal.py`) — 헤드라인 '주목할 실제 변화'(2024→2025 설계 동일 구간만), 2023→2024 개편·척도 변경은 '⚠️ 해석 유의' 분리. 집계·비응답·이진 상보 중복 제외. 차트 연도축 ordinal 전환.
+> - [x] `app.py` → `ui/` 모듈화 완료 — 단계·탭 화면을 `ui/`로 전량 추출(`signal` 895·`review` 426·`ingest` 355·`rag` 107·`index` 56·`common` 18행). **app.py 1935→309행**(셸: 라우팅·스텝퍼·상태/로그 패널). 한 모듈씩 ruff·테스트 검증(68 passed).
+> - [x] 6.4 질문 재작성(`REWRITE_MODEL`) — `rewrite_query()`, 검색어만 정규화·확장(recall↑), RAG 탭 체크박스.
+> - [x] 6.7 예시 질문(`EXAMPLE_Q_MODEL`) — `suggest_questions()`, 실데이터 기반 추천 질문(RAG 탭 클릭→채움).
+> - [x] 6.8 `eval/` — 검색·인용 품질 평가셋(`questions.jsonl` gold 6케이스 + `run_eval.py` 채점 러너). 케이스 확충은 백로그.
 > - [ ] (연계) 검토 후보(`vision_candidates.csv`)를 검수 탭에 노출 + 문항-서술 청크 추가
 >
-> ### ⚠️ 재점검 기반 다음 할 일 (2026-06-26) — 상세는 [`logging.md`](./logging.md)
+> ### ⚠️ 재점검 기반 다음 할 일 (2026-06-26) — 상세는 [`LOGGING.md`](./LOGGING.md)
 > **결정 먼저(범위)**: 스텝퍼 재설계가 원래의 작은 요청(업로드 가시화·탭 통합)보다 과했음. (a)현 스텝퍼+실제검증 / (b)최소안 축소 / (c)절충 중 **사용자와 합의 후** 진행. 그 전엔 신규 기능 추가 금지.
 > 우선순위 백로그:
 > - **A(최우선)** 인덱스–게이트 정합: 현재 라이브 인덱스가 게이트 미통과 데이터(미확정 비전38·미검수 high33·빈값)로 구축됨 → 검수 확정 후 재인덱싱(또는 "미통과 인덱스" 경고 표시). 원칙 위반 해소.
 > - **C** 실제 검증: E2E가 `RAG_FAKE_LLM`이라 UI 배선만 증명. 🩺 로그 패널·실제 검색/답변·실제 인제스트를 실제 LLM(`@slow`)/수동으로 검증 + `eval/` 회귀 안전망.
 > - **B** 인제스트 견고화: happy-path·에러 복구·`state.json` 영속(새로고침 복구) 미구현.
 > - **D** 범위 완성: 빈칸5·옛 연도(2007,2013~2022)·"실시간 신호등" 시각화 미착수.
+
+### 🔜 다음 할 일 (2026-07-03) — 커밋 게이트 통과 후
+- **커밋/푸시**: 이번 세션 산출물 + `samples/`(Option A: CSV·청크·Chroma 포함, PDF 제외)을 로컬 커밋 → `/ship`으로 푸시. PDF는 `.gitignore: samples/data/*.pdf`가 자동 제외. (정책: [`DECISIONS.md` D15](./DECISIONS.md))
+- **최우선(근본 해금)** — **2014~2022 옛 보고서 인제스트**. 변곡점 해석의 천장을 올리는 유일한 근본 해법(현재 2023~2025 3개년, 깨끗한 전이는 2024→2025 하나뿐이라 외부 맥락 대조가 얕음). 실제 착수는 옛 KEITI·환경부 보고서 **확보 가능 여부에 gated**(사용자 확인 대기). ← D14·백로그 D의 선결 과제.
+- **알려진 데이터 이슈(소규모)** — 복원 경로(`confirmed_only_rows`)가 살짝 다른 키로 기존 라벨을 재추가해 **청크 3/196에 중복 응답라인**(예: '구매 의향 있음: 96.0%' 2회). 검색엔 무해하나 정합성 차원 정리 대상(복원 전 full-key 정규화 검토).
+- **eval 확충** — gold 6케이스에 **외부 맥락·advise 상황 해석** 회귀 케이스 추가(6.8 백로그).
 
 ---
 
@@ -97,14 +108,14 @@
 
 > 정제된 데이터셋/원문 위에 자연어 질의응답을 올린다. 모델은 `config.py` 역할별 상수 사용.
 
-- [ ] 6.1 **청킹** `rag/chunking.py` — 문항 블록 단위 청크. metadata 필수항목 유지(source/page/parser_type/chunk_id/token_count/warning)
-- [ ] 6.2 **임베딩·인덱싱** `rag/index.py` — `EMBEDDING_MODEL`(text-embedding-3-small) + Chroma 벡터DB 구축
-- [ ] 6.3 **검색** `rag/retriever.py` — 벡터 유사도 top-k 검색
-- [ ] 6.4 **질문 재작성** — `REWRITE_MODEL`로 질의 정규화/확장
-- [ ] 6.5 **Reranker** — `RERANKER_MODEL`로 검색 결과 재정렬
-- [ ] 6.6 **답변 생성** — `ANSWER_MODEL`, 근거(출처·연도) 인용
-- [ ] 6.7 **예시 질문** — `EXAMPLE_Q_MODEL`로 추천 질문 생성
-- [ ] 6.8 평가셋 `eval/` — 표준화/검색 품질 점검용 질문 작성
+- [x] 6.1 **청킹** `rag/retrieval/chunking.py` — (year, std_id) 사실 청크 + 방법론 지식청크. metadata 필수항목 유지(source/page/parser_type/chunk_id/token_count/warning)
+- [x] 6.2 **임베딩·인덱싱** `rag/retrieval/index.py` — `EMBEDDING_MODEL`(text-embedding-3-small) + Chroma 벡터DB(`outputs/chroma/`, cosine)
+- [x] 6.3 **검색** `rag/retrieval/retriever.py` — 벡터 유사도 top-k 검색(연도·std_id·parser_type 필터)
+- [x] 6.4 **질문 재작성** — `answer.rewrite_query()`(`REWRITE_MODEL`): 질의 정규화/확장으로 recall↑. 검색어만 재작성하고 연도·라우팅·표시는 원 질문 유지. `answer(rewrite=True)` + RAG 탭 체크박스(`Answer.rewritten`로 투명 노출). FAKE·실패 시 원문 폴백.
+- [x] 6.5 **Reranker** — `RERANKER_MODEL`로 검색 결과 재정렬(`retriever._rerank`, listwise)
+- [x] 6.6 **답변 생성** — `rag/retrieval/answer.py`, `ANSWER_MODEL`, 근거(출처·연도) 인용. 두 모드(`cite`·`advise`) + 상세도(요약/표준/상세)
+- [x] 6.7 **예시 질문** — `answer.suggest_questions()`(`EXAMPLE_Q_MODEL`): 인덱싱된 실제 문항명을 씨앗으로 '답할 수 있는' 추천 질문 생성(RAG 탭 클릭→질문칸 채움). FAKE·실패 시 정적 폴백.
+- [x] 6.8 평가셋 `eval/` — `eval/questions.jsonl` + `eval/run_eval.py`(검색·인용 품질 점검)
 
 ---
 

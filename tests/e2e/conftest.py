@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.request
@@ -33,17 +32,23 @@ LOG_DIR = PROJECT_ROOT / "logs"
 
 
 def _free_port(port: int) -> None:
-    """ 해당 포트를 LISTEN 중인 프로세스를 종료(트리째). 이전 테스트/수동 기동 잔재 정리. """
+    """ 해당 포트를 LISTEN 중인 프로세스를 종료. 이전 테스트/수동 기동 잔재 정리.
+        플랫폼별: Windows=netstat+taskkill, POSIX(macOS/Linux)=lsof+kill.
+        (POSIX 에서 이걸 안 하면 옛 코드로 뜬 stale 서버가 포트에 남아 다음 세션이
+         그걸 재사용 → 파이프라인 경로 변경 등이 반영 안 돼 e2e 가 엉뚱하게 실패한다.) """
     try:
-        out = subprocess.run(["netstat", "-ano", "-p", "tcp"],
-                             capture_output=True, text=True).stdout
-        pids = set()
-        for line in out.splitlines():
-            if f":{port} " in line and "LISTENING" in line:
-                pids.add(line.split()[-1])
-        for pid in pids:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", pid],
-                           capture_output=True)
+        if os.name == "nt":
+            out = subprocess.run(["netstat", "-ano", "-p", "tcp"],
+                                 capture_output=True, text=True).stdout
+            pids = {line.split()[-1] for line in out.splitlines()
+                    if f":{port} " in line and "LISTENING" in line}
+            for pid in pids:
+                subprocess.run(["taskkill", "/F", "/T", "/PID", pid], capture_output=True)
+        else:
+            out = subprocess.run(["lsof", "-ti", f"tcp:{port}"],
+                                 capture_output=True, text=True).stdout
+            for pid in out.split():
+                subprocess.run(["kill", "-9", pid], capture_output=True)
     except Exception:
         pass
 
@@ -131,8 +136,18 @@ def streamlit_server(server_log: Path):
             )
         yield BASE_URL
     finally:
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                       capture_output=True)
+        # 서버 종료(플랫폼별). POSIX 는 taskkill 이 없어 terminate→kill 후 포트까지 정리해야
+        # stale 서버가 안 남는다(안 그러면 다음 세션이 옛 코드 서버를 재사용).
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True)
+        else:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+            _free_port(PORT)   # streamlit 이 띄운 자식까지 포트 기준으로 정리
         try:
             logf.close()
         except Exception:

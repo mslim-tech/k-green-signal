@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from rag import integrate_oldyears as I
+from rag.curate import integrate_oldyears as I
 
 
 def test_apply_worksheet_prefix_and_longest():

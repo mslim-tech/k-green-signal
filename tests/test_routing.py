@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pytest
 
-from rag.routing import route
+from rag.retrieval.routing import route
 
 
 @pytest.mark.parametrize("query, expected", [
