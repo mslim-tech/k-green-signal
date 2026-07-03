@@ -99,7 +99,7 @@ flowchart TD
 | **5. 검수 UI** | `ui/review.py`(스텝퍼 3단계) + `rag/curate/corrections.py` | 저신뢰 행을 사람이 원문과 대조·수정 → `corrections.jsonl` | ✅ |
 | **6. RAG 검색** | `rag/retrieval/{chunking,index,routing,retriever,answer}.py` | 정형 데이터 위 **근거 인용 질의응답**(Chroma 벡터검색 → **LLM rerank** → 출처 인용 답변). **두 모드**(`cite` 사실 인용 · `advise` 데이터 기반 제언 — KEEP/ADD/DROP/FIX 다면검색) + **상세도**(요약/표준/상세) + **질문 재작성**(recall↑)·**예시 질문**. 방법론 '비교 유의'·**외부 맥락(그해 사건)** 지식청크도 함께 인덱싱·검색 → advise가 **데이터 변화를 사건과 엮어 상황 해석**(상관·인과 구분) | ✅ 기본 |
 | **🚦 신호등** | `rag/signals.py` + `ui/signal.py` | 연도 추세 신호(🟢상승/🟡보합/🔴하락). 의사결정용 **3단 분리** — 🟢설계 동일·크기 정상(바로 판단) · 🔶이례적 급변(>15%p, 검증 필요) · ⚠️개편·척도 변경(해석 유의). 집계·비응답·이진 상보 중복 제외. 단일 연도 문항은 그 해 스냅샷(파레토), '변곡점 × 외부 맥락' 패널 | ✅ |
-| **+ 앱/검증** | `app.py` 3모드 · `rag/curate/validate.py`(준비 게이트) · `rag/pipeline.py` · `tests/e2e`(Playwright) | **🚦 대시보드(랜딩)** · 💬 질의 · 🛠 데이터 준비(업로드→인제스트→검수→(게이트)→인덱싱 스텝퍼) + 🩺 시스템 로그 | ✅ |
+| **+ 앱/검증** | `app.py` 3모드 · `rag/curate/validate.py`(준비 게이트) · `rag/pipeline.py` · `tests/e2e`(Playwright) | **🚦 대시보드(랜딩)** · 💬 AI에게 묻기 · 🛠 데이터 준비(업로드→인제스트→검수→(게이트)→인덱싱 스텝퍼) + 🩺 시스템 로그 | ✅ |
 
 > 단계별 세부 체크리스트는 [`PLAN.md`](./docs/PLAN.md) 참고.
 
@@ -115,12 +115,12 @@ flowchart TD
 
 ```
 k-green-signal/
-├── app.py                          # 진입점 셸(355행): 3모드 라우팅(대시보드/질의/데이터 준비)·상태/🩺 로그 패널 + main()
+├── app.py                          # 진입점 셸(360행): 3모드 라우팅(대시보드/AI에게 묻기/데이터 준비)·상태/🩺 로그 패널 + main()
 ├── ui/                             # app.py 에서 추출한 UI 패키지(모드·단계 화면 전량 분리)
 │   ├── signal.py                   #   🚦 신호등 대시보드 — 랜딩 화면(의사결정 프레이밍)
 │   ├── review.py                   #   데이터 준비 3단계 검수(순차 모드·원문 페이지 미리보기) + 비전 후보 + LLM 검증(adjudicate)
 │   ├── ingest.py                   #   데이터 준비 1·2단계 업로드·인제스트 화면 + 진행 모니터
-│   ├── rag.py                      #   💬 질의 모드(사실 인용/데이터 기반 제언 카드 · 상세도 · 질문 재작성 · 예시 질문 · 출처 카드)
+│   ├── rag.py                      #   💬 AI에게 묻기(사실 인용/데이터 기반 제언 카드 · 상세도 · 질문 재작성 · 예시 질문 · 출처 카드)
 │   ├── index.py                    #   데이터 준비 4단계 인덱싱 화면(준비 게이트)
 │   └── common.py                   #   공유 상수·경로(REVIEW_QUEUE_PATH · VISION_CANDIDATES_PATH · DATA_DIR)
 ├── curation/                       # 커밋되는 사람 큐레이션·검수 입력(설정 아님)
@@ -219,7 +219,7 @@ uv run python -m rag.curate.validate                                # 인덱싱 
 uv run python -m rag.retrieval.chunking && uv run python -m rag.retrieval.index
 uv run python -m rag.retrieval.answer "2023년 확대 희망 친환경제품 1위는?"   # (선택) CLI 질의 테스트
 
-# 앱 실행 — 🚦 대시보드 랜딩(질의·데이터 준비 스텝퍼는 상단 모드 버튼으로)
+# 앱 실행 — 🚦 대시보드 랜딩(💬 AI에게 묻기·🛠 데이터 준비는 상단 모드 버튼으로)
 uv run streamlit run app.py
 ```
 

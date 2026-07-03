@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 uv sync                                    # 의존성 설치
-uv run streamlit run app.py                # 앱 실행(🚦 대시보드 랜딩 + 질의/데이터 준비 3모드)
+uv run streamlit run app.py                # 앱 실행(🚦 대시보드 랜딩 + 💬 AI에게 묻기 + 🛠 데이터 준비 3모드)
 
 # 테스트 — 기본은 'not slow'(빠르고 결정적, LLM 미호출)만 돈다(pyproject addopts)
 uv run pytest                              # 전체(단위 + E2E, slow 제외)
@@ -94,7 +94,7 @@ std_id 가 비결정적으로 바뀌어 corrections·routing·eval·테스트가
 - 산출물 경로는 `rag/core/paths.py`의 `OUTPUT_DIR`(env override).
 - 각 `rag/*.py`는 `from rag.x import ...`(패키지) / `from x import ...`(직접 실행) 이중 import를 try/except로 지원 — 새 모듈도 이 패턴을 따른다.
 
-**앱 오케스트레이션**: `app.py`는 3모드 — 🚦 대시보드(정형 CSV가 있으면 랜딩, 키·인덱스 불필요) · 💬 질의(Q&A) · 🛠 데이터 준비(업로드→인제스트→검수→인덱싱 4단계 게이트 스텝퍼) + 🩺 시스템 로그. 긴 LLM 단계는 `rag/pipeline.py`로 **서브프로세스** 실행해 Streamlit을 막지 않고 로그를 단계별 캡처한다(Popen은 `st.session_state`에 보관, 새로고침 복구는 pid 영속화).
+**앱 오케스트레이션**: `app.py`는 3모드 — 🚦 대시보드(정형 CSV가 있으면 랜딩, 키·인덱스 불필요) · 💬 AI에게 묻기(RAG 질의·advise) · 🛠 데이터 준비(업로드→인제스트→검수→인덱싱 4단계 게이트 스텝퍼) + 🩺 시스템 로그. 긴 LLM 단계는 `rag/pipeline.py`로 **서브프로세스** 실행해 Streamlit을 막지 않고 로그를 단계별 캡처한다(Popen은 `st.session_state`에 보관, 새로고침 복구는 pid 영속화).
 
 ---
 
@@ -128,7 +128,7 @@ LLM 보조의 흔한 실수(불필요한 변경·과설계·뒤늦은 질문)를
 - 외부에 푸시하기 전 비밀·원본 데이터 노출 여부를 점검한다.
 
 ## 프로젝트 구조
-- Streamlit 앱 진입점은 `app.py`(3모드 — 🚦 대시보드 랜딩 · 💬 질의 · 🛠 데이터 준비 4단계 스텝퍼)이고, 각 화면은 `ui/`로 분리돼 있다(`ui/ingest.py`·`review.py`·`index.py`·`signal.py`·`rag.py`, 공용은 `ui/common.py`). 새 화면은 `ui/`에 파일로 추가하고 `app.py`에서 `render_*`를 호출한다.
+- Streamlit 앱 진입점은 `app.py`(3모드 — 🚦 대시보드 랜딩 · 💬 AI에게 묻기 · 🛠 데이터 준비 4단계 스텝퍼)이고, 각 화면은 `ui/`로 분리돼 있다(`ui/ingest.py`·`review.py`·`index.py`·`signal.py`·`rag.py`, 공용은 `ui/common.py`). 새 화면은 `ui/`에 파일로 추가하고 `app.py`에서 `render_*`를 호출한다.
 - `rag/`는 서브패키지로 나뉜다: `ingest/`(파싱·추출·비전) · `transform/`(표준화·정제·플래그) · `curate/`(검수·LLM검증·지식로더·백필) · `retrieval/`(청킹·인덱싱·검색·답변) · `core/`(config·paths·logging). 서브프로세스 러너는 `rag/pipeline.py`.
 - 문서 진단 `rag/ingest/ingestion.py` · Chunking `rag/retrieval/chunking.py` · Vector DB `rag/retrieval/index.py` · 검색 `rag/retrieval/retriever.py`.
 - 산출물은 `outputs/`(작업 폴더, gitignore) — 레퍼런스 사본은 `samples/`. 사람 확정 지식은 `curation/`(git 추적). 평가 질문·러너는 `eval/`(`questions.jsonl`·`run_eval.py`), 샘플/원본 문서는 `data/`.
