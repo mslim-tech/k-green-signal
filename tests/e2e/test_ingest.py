@@ -13,7 +13,9 @@ from playwright.sync_api import Page, expect
 
 def _goto_ingest(page: Page):
     page.goto("/")
-    expect(page.get_by_text(re.compile("실시간 신호등"))).to_be_visible(timeout=30000)
+    expect(page.get_by_text(re.compile("실시간 신호등")).first).to_be_visible(timeout=30000)
+    # 인제스트는 🛠 데이터 준비 모드의 2단계.
+    page.get_by_role("button", name=re.compile("데이터 준비")).click()
     page.get_by_role("button", name=re.compile(r"2\. ⚙️ 인제스트")).click()
     expect(page.get_by_role("button", name=re.compile("전체 실행"))).to_be_visible(timeout=15000)
     # 셀렉트박스 기본값 = 최신 연도 PDF(앱이 최신순 정렬). 산출이 최신이라 스킵 테스트가 결정적.

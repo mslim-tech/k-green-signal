@@ -90,6 +90,7 @@ def _ingest_recover() -> None:
     st.session_state.ingest = saved
     st.session_state.ingest_proc = None    # 복구엔 Popen 없음 → pid 경로로 모니터
     st.session_state.ingest_recovered = True
+    st.session_state.mode = "prep"         # 랜딩 setdefault 보다 먼저 실행돼 우선한다
     st.session_state.step = 2              # 진행 중 인제스트를 볼 수 있게 2단계로
     logger.info("인제스트 복구: run=%s idx=%s", saved.get("run_id"), saved.get("idx"))
 

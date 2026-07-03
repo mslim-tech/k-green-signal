@@ -14,8 +14,10 @@ from playwright.sync_api import Page, expect
 
 def test_review_blank_value_guidance(page: Page, base_url: str):
     page.goto("/")
-    expect(page.get_by_text(re.compile("실시간 신호등"))).to_be_visible(timeout=30000)
+    expect(page.get_by_text(re.compile("실시간 신호등")).first).to_be_visible(timeout=30000)
 
+    # 검수는 🛠 데이터 준비 모드의 3단계.
+    page.get_by_role("button", name=re.compile("데이터 준비")).click()
     page.get_by_role("button", name=re.compile(r"3\. 🔍 검수")).click()
 
     # 빈값 안내(아직 남은 빈칸 경고 OR 모두 처리됨 안내) 중 하나는 보여야 한다.

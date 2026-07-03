@@ -1,6 +1,6 @@
 # ui/signal.py
 # -----------------------------------------------------------------------------
-# 6단계 · 실시간 신호등 대시보드 (app.py 에서 분리).
+# 🚦 실시간 신호등 대시보드 — 앱의 랜딩 화면 (app.py 에서 분리).
 #   - 정형 사실 데이터를 연도별 추세 신호(🟢🟡🔴)로 시각화하고,
 #     '비교 가능한 실제 변화'는 헤드라인, 2023→'24 개편구간/척도변경은 '해석 유의'로 분리한다.
 #   - 순수 계산은 rag/signals.py, 화면/차트만 여기.
@@ -738,9 +738,9 @@ def _mover_card(ind, s, threshold, *, verify: bool = False) -> None:
 
 
 def render_step_signal(ctx: dict) -> None:
-    """ 6단계 · 실시간 신호등. 정형 데이터의 응답 항목을 연도별로 이어 추세 신호로 표시. """
+    """ 🚦 실시간 신호등(랜딩). 정형 데이터의 응답 항목을 연도별로 이어 추세 신호로 표시. """
 
-    st.subheader("🚦 6단계 · 실시간 신호등 (연도별 추세)")
+    st.subheader("🚦 실시간 신호등 (연도별 추세)")
     st.caption(
         "정형 데이터의 응답 항목을 연도별로 이어 추세를 신호로 보여줍니다. "
         "색은 **추세 방향**입니다 — 🟢 상승 · 🟡 보합 · 🔴 하락 "
@@ -750,7 +750,10 @@ def render_step_signal(ctx: dict) -> None:
     try:
         rows = chunking.load_rows()
     except Exception as error:
-        st.warning(f"먼저 인제스트(2단계)로 정형 데이터를 만들어 주세요. ({error})")
+        st.warning(f"아직 정형 데이터가 없습니다. 🛠 데이터 준비에서 인제스트를 실행해 주세요. ({error})")
+        if st.button("🛠 데이터 준비로 이동", key="goto_prep_from_signal"):
+            st.session_state.mode = "prep"
+            st.rerun()
         return
 
     ds_years = signals.dataset_years(rows)
@@ -808,7 +811,7 @@ def render_step_signal(ctx: dict) -> None:
         if st.button("💡 이 데이터로 2026 설문 설계 제언 받기", type="primary"):
             st.session_state["rag_mode"] = "데이터 기반 제언"
             st.session_state["rag_question"] = "최근 3개년 근거로 2026 인지도 설문을 어떻게 설계하면 좋을까?"
-            st.session_state.step = 5
+            st.session_state["mode"] = "qa"
             st.rerun()
 
         counts = signals.summarize(inds, threshold)

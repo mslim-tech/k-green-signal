@@ -55,14 +55,15 @@ class Step:
 # 인제스트 체인: 업로드된 PDF → 추출 → 표준화 → 정제 → 검수 큐 → (비전 빈칸 회수)
 # refill_vision 은 '빈칸(추출 실패) 위치만' 비전으로 다시 읽어 '검토 후보'를 제안한다.
 # canonical CSV 는 안 건드리며(추측 격리), 실패해도 앞의 검수 큐/게이트를 막지 않도록 optional.
+# 타이틀에 번호를 붙이지 않는다 — 앱 화면의 '1~4단계' 번호와 이중 체계가 돼 혼란.
 INGEST_STEPS: list[Step] = [
-    Step("extract",     "2. LLM 추출",        "ingest.extract",       True,  True,  ""),
-    Step("standardize", "3. 표준화",          "transform.standardize", False, True,  "standardized_long.csv"),
-    Step("refine",      "4.1 라벨 표준화",     "transform.refine",      False, True,  "standardized_long.clean.csv"),
-    Step("dedup",       "4.2 중복 정리",       "transform.dedup",       False, False, "standardized_long.dedup.csv"),
-    Step("flags",       "4.3 의심값 플래그",    "transform.flags",       False, True,  "standardized_long.flagged.csv"),
-    Step("review",      "4.4 검수 큐",         "transform.review",      False, False, "review_queue.csv"),
-    Step("refill_vision", "4.5 비전 빈칸 회수", "curate.refill_vision",  False, True, "vision_candidates.csv", optional=True),
+    Step("extract",     "LLM 추출",        "ingest.extract",       True,  True,  ""),
+    Step("standardize", "표준화",          "transform.standardize", False, True,  "standardized_long.csv"),
+    Step("refine",      "라벨 표준화",      "transform.refine",      False, True,  "standardized_long.clean.csv"),
+    Step("dedup",       "중복 정리",        "transform.dedup",       False, False, "standardized_long.dedup.csv"),
+    Step("flags",       "의심값 플래그",     "transform.flags",       False, True,  "standardized_long.flagged.csv"),
+    Step("review",      "검수 큐",          "transform.review",      False, False, "review_queue.csv"),
+    Step("refill_vision", "비전 빈칸 회수",  "curate.refill_vision",  False, True, "vision_candidates.csv", optional=True),
 ]
 STEP_BY_KEY = {s.key: s for s in INGEST_STEPS}
 

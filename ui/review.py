@@ -1,7 +1,7 @@
 # ui/review.py
 # -----------------------------------------------------------------------------
-# 검수 탭(5단계) — review_queue.csv 를 표로 보여주고, 사람이 값을 확인/수정하면
-# corrections.jsonl 에 기록한다. LLM 검증(adjudicate) 실행 버튼·비전 후보도 여기.
+# 검수 화면(데이터 준비 3단계) — review_queue.csv 를 표로 보여주고, 사람이 값을
+# 확인/수정하면 corrections.jsonl 에 기록한다. LLM 검증(adjudicate) 실행 버튼·비전 후보도 여기.
 # 저장/적용 로직은 rag/curate/corrections.py 가 담당한다(여기선 화면만).
 # -----------------------------------------------------------------------------
 from __future__ import annotations

@@ -1,16 +1,12 @@
 # app.py
 # -----------------------------------------------------------------------------
-# RAG Lab - Streamlit 앱 (탭 2개)
+# k-green-signal Streamlit 앱 — "결과 먼저, 관리 나중" 3모드 구조.
 #
-# 이 파일의 역할:
-#   1) "📄 문서 Q&A" 탭 (Phase 1 Baseline, Long Context 방식)
-#      - 문서(PDF/TXT/DOCX)를 업로드하면 텍스트를 추출하고, 문서 전체를
-#        프롬프트에 넣어 OpenAI 모델에게 답변을 받는다.
-#      - 아직 Chunking / Embedding / Vector DB / Retriever 는 사용하지 않는다.
-#   2) "🔍 검수" 탭 (5단계)
-#      - 4단계 산출 outputs/review_queue.csv(저신뢰 행)을 표로 보여주고,
-#        사람이 값을 확인/수정하면 outputs/corrections.jsonl 에 기록한다.
-#      - 저장/적용 로직은 rag/curate/corrections.py 가 담당한다(여기선 화면만).
+# 이 파일의 역할(오케스트레이션만 — 각 화면은 ui/ 모듈):
+#   🚦 대시보드    : 신호등(연도별 추세). 정형 데이터가 있으면 여기가 첫 화면(랜딩).
+#                   API Key·인덱스 없이도 동작한다(정형 CSV 만 읽음).
+#   💬 질의(Q&A)  : 인덱스에서 검색해 출처 인용/데이터 기반 제언 답변(키 필요).
+#   🛠 데이터 준비 : 1 업로드 → 2 인제스트 → 3 검수 → 4 인덱싱 스텝퍼(게이트 순서 유지).
 # -----------------------------------------------------------------------------
 
 import logging
@@ -21,18 +17,21 @@ import streamlit as st
 from dotenv import load_dotenv
 
 
-# 검수 기록 저장/적용 로직 (5단계)
+# 검수 기록 저장/적용 로직 (검수 화면이 corrections.jsonl 에 기록)
 from rag.curate import corrections
 
 # 공용 로깅 (파일+콘솔). 앱이 무슨 일을 하는지 logs/ 에 남긴다.
 from rag.core.logging_setup import setup_logging
 
+# 산출물 디렉터리(env RAG_OUTPUT_DIR 반영) — 랜딩 판단(rows_ready)에 쓴다.
+from rag.core.paths import OUTPUT_DIR
+
 # 인제스트 단계를 서브프로세스로 돌리는 러너(긴 LLM 단계가 UI 를 막지 않게).
 from rag import pipeline
 
-# 6단계 신호등 대시보드는 모듈로 분리(ui/signal.py).
+# 신호등 대시보드는 모듈로 분리(ui/signal.py).
 from ui.signal import render_step_signal
-# 검수 탭(5단계)은 모듈로 분리(ui/review.py).
+# 검수 화면(3단계)은 모듈로 분리(ui/review.py).
 from ui.review import render_review_tab, load_review_queue
 # 공유 상수(검수 큐 경로) — build_ctx·_review_remaining_high 가 쓴다.
 from ui.common import REVIEW_QUEUE_PATH, _data_pdfs
@@ -65,17 +64,22 @@ NO_KEY_MSG = (
     "프로젝트 폴더에 `.env` 파일을 만들고 `OPENAI_API_KEY=sk-...` 한 줄을 넣어주세요."
 )
 
-# (번호, 라벨, 키) — 화면 순서
+# 최상위 모드 — 결과(대시보드·질의)와 관리(데이터 준비)를 분리한다.
+MODES = [
+    ("signal", "🚦 대시보드"),
+    ("qa", "💬 질의(Q&A)"),
+    ("prep", "🛠 데이터 준비"),
+]
+
+# (번호, 라벨, 키) — 🛠 데이터 준비 스텝퍼의 화면 순서
 STEPS = [
     (1, "📤 업로드", "upload"),
     (2, "⚙️ 인제스트", "ingest"),
     (3, "🔍 검수", "review"),
     (4, "📚 인덱싱", "index"),
-    (5, "💬 질의(Q&A)", "qa"),
-    (6, "🚦 신호등", "signal"),
 ]
-# 임베딩/추출/답변에 API Key 가 필요한 단계
-STEPS_NEED_KEY = {2, 4, 5}
+# 추출/임베딩에 API Key 가 필요한 단계(질의 모드의 키 확인은 main 의 qa 분기에서)
+STEPS_NEED_KEY = {2, 4}
 
 # D2: 각 단계에서 '지금 무엇을 해야 하는지' 한 줄 안내(행동 유도)
 STEP_TODO = {
@@ -83,14 +87,19 @@ STEP_TODO = {
     2: "'전체 실행'을 눌러 추출~검수큐까지 처리하세요. (완료까지 수 분 걸릴 수 있어요)",
     3: "🔴 값 없는 행부터 골라 원문을 보고 값을 확정(저장)하세요.",
     4: "준비 게이트를 통과하면 '인덱싱 실행'을 누르세요.",
-    5: "데이터에 대해 질문을 입력하세요. (출처 인용 답변)",
-    6: "연도별 추세 신호등을 살펴보세요. 색은 추세 방향(상승/보합/하락)입니다.",
 }
 
 
 def render_next_step_nav(ctx: dict, step: int) -> None:
-    """ D2: 현재 단계를 마치면 다음 단계로 가는 버튼/안내. """
+    """ D2: 현재 단계를 마치면 다음 단계로 가는 버튼/안내. 마지막 단계 뒤엔 결과로 안내. """
     if step >= len(STEPS):
+        # 데이터 준비 완료 → 결과(대시보드)로 돌아가는 고리.
+        if ctx["index_count"] > 0:
+            st.divider()
+            if st.button("🚦 대시보드 보기", type="primary", key="goto_dashboard"):
+                st.session_state.mode = "signal"
+                st.rerun()
+            st.caption("💬 질의(Q&A)에서 데이터에 대해 질문할 수도 있습니다.")
         return
     nxt = step + 1
     label = next(lbl for n, lbl, _ in STEPS if n == nxt)
@@ -130,6 +139,10 @@ def build_ctx() -> dict:
         "review_queue": REVIEW_QUEUE_PATH.exists(),
         "remaining_high": _review_remaining_high() if REVIEW_QUEUE_PATH.exists() else 0,
         "index_count": _index_count(),
+        # 신호등이 읽는 정형 CSV 가 있는가(대시보드 랜딩 판단). OUTPUT_DIR 는 env 를
+        # 따르므로(E2E 격리) chunking.SOURCE_CSV(임포트 시 고정) 대신 직접 확인한다.
+        "rows_ready": (OUTPUT_DIR / "standardized_long.dedup.csv").exists()
+                      or (OUTPUT_DIR / "standardized_long.clean.csv").exists(),
     }
 
 
@@ -141,10 +154,6 @@ def can_enter(step_no: int, ctx: dict) -> bool:
         return ctx["pdf_count"] > 0          # 업로드된 PDF 가 있어야 인제스트
     if step_no in (3, 4):
         return ctx["review_queue"]           # 인제스트 산출(검수 큐)이 있어야
-    if step_no == 5:
-        return ctx["index_count"] > 0        # 인덱스가 있어야 질의
-    if step_no == 6:
-        return ctx["review_queue"]           # 정형 데이터(검수 큐 산출)가 있으면 추세 표시
     return False
 
 
@@ -171,8 +180,25 @@ def _step_state(step_no: int, ctx: dict, current: int) -> str:
 
 
 # -----------------------------------------------------------------------------
-# 스텝퍼 헤더(네비) + 상태 패널 + 시스템 로그 패널
+# 모드 네비 + 스텝퍼 헤더(네비) + 상태 패널 + 시스템 로그 패널
 # -----------------------------------------------------------------------------
+def render_mode_nav() -> None:
+    """ 최상위 모드 버튼 3개. 항상 활성 — 준비 안내는 각 화면 안에서 한다(잠금 없음). """
+    current = st.session_state.mode
+    # Playwright/검증용 상태 센티넬(현재 모드)
+    st.markdown(
+        f"<span data-testid='mode-status' style='display:none'>{current}</span>",
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(len(MODES))
+    for col, (key, label) in zip(cols, MODES):
+        with col:
+            icon = "▶" if key == current else "○"
+            if st.button(f"{icon} {label}", key=f"mode_{key}", width="stretch"):
+                st.session_state.mode = key
+                st.rerun()
+
+
 def render_stepper_nav(ctx: dict, current: int) -> None:
     cols = st.columns(len(STEPS))
     icon = {"current": "▶", "done": "✅", "open": "○", "locked": "🔒"}
@@ -205,17 +231,17 @@ def render_status_panel(ctx: dict, gate=None) -> None:
                 st.warning("인덱스 정합: ⚠️ 미통과(미확정/빈값/미검수 포함 가능) — 검수 후 재인덱싱 권장")
 
         st.divider()
-        # 다음 할 일 안내
+        # 다음 할 일 안내(모드 인지형 — 어디로 가야 하는지까지 알려준다)
         if ctx["pdf_count"] == 0:
-            nxt = "1단계에서 보고서 PDF를 업로드하세요."
+            nxt = "🛠 데이터 준비 1단계에서 보고서 PDF를 업로드하세요."
         elif not ctx["review_queue"]:
-            nxt = "2단계에서 인제스트를 실행하세요."
+            nxt = "🛠 데이터 준비 2단계에서 인제스트를 실행하세요."
         elif ctx["remaining_high"] > 0:
-            nxt = f"3단계에서 high {ctx['remaining_high']}건을 검수하세요."
+            nxt = f"🛠 데이터 준비 3단계에서 high {ctx['remaining_high']}건을 검수하세요."
         elif ctx["index_count"] == 0:
-            nxt = "4단계에서 인덱싱하세요."
+            nxt = "🛠 데이터 준비 4단계에서 인덱싱하세요."
         else:
-            nxt = "5단계에서 질문하세요. (준비 완료)"
+            nxt = "준비 완료 — 🚦 대시보드에서 추세를 보고, 💬 질의에서 질문하세요."
         st.info(f"👉 다음 할 일: {nxt}")
 
 
@@ -243,7 +269,7 @@ def render_log_panel() -> None:
 
 
 # -----------------------------------------------------------------------------
-# 3) 진입점 — 스텝퍼 구성 + 현재 단계 렌더링
+# 3) 진입점 — 모드 구성(대시보드/질의/데이터 준비) + 현재 화면 렌더링
 # -----------------------------------------------------------------------------
 def main():
     # 로깅 먼저(멱등). 로그 파일 경로는 세션에 보관(로그 패널이 tail).
@@ -254,20 +280,24 @@ def main():
 
     st.set_page_config(page_title="k-green-signal", layout="wide")
     st.title("🚦 대한민국 친환경 소비 인지도 실시간 신호등")
-    st.caption("k-green-signal · 업로드 → 인제스트 → 검수 → 인덱싱 → 질의")
+    st.caption("k-green-signal · 🚦 대시보드 — 💬 질의(Q&A) — 🛠 데이터 준비(업로드→인제스트→검수→인덱싱)")
 
     api_key = get_api_key()
     ctx = build_ctx()
+    # 결과 먼저: 정형 데이터가 있으면 대시보드로, 없으면 데이터 준비로 랜딩.
+    # (_ingest_recover 가 prep 으로 정했을 수 있으므로 setdefault — 덮어쓰지 않는다.)
+    st.session_state.setdefault("mode", "signal" if ctx["rows_ready"] else "prep")
     # 렌더 로그는 상태가 실제로 바뀔 때만 남긴다. Streamlit 은 상호작용마다 rerun 하므로
     # 매 렌더에 찍으면 동일 줄이 쌓여 로그의 신호(실제 상태 전이)가 묻힌다.
-    render_state = (st.session_state.step, ctx["pdf_count"], ctx["index_count"], bool(api_key))
+    render_state = (st.session_state.mode, st.session_state.step,
+                    ctx["pdf_count"], ctx["index_count"], bool(api_key))
     if st.session_state.get("_last_render_state") != render_state:
         st.session_state["_last_render_state"] = render_state
-        logger.info("앱 렌더 — step=%s, pdf=%s, idx=%s, api_key=%s",
-                 st.session_state.step, ctx["pdf_count"], ctx["index_count"],
-                 "있음" if api_key else "없음")
+        logger.info("앱 렌더 — mode=%s, step=%s, pdf=%s, idx=%s, api_key=%s",
+                 st.session_state.mode, st.session_state.step,
+                 ctx["pdf_count"], ctx["index_count"], "있음" if api_key else "없음")
 
-    # 준비 게이트는 인덱스 정합 경고(D5)·인덱싱(4)에서 공유하므로 한 번만 계산.
+    # 준비 게이트는 인덱스 정합 경고(D5)·검수(3)·인덱싱(4)에서 공유하므로 한 번만 계산.
     gate = None
     if ctx["review_queue"]:
         try:
@@ -277,31 +307,47 @@ def main():
             gate = None
 
     render_status_panel(ctx, gate)
-    render_stepper_nav(ctx, st.session_state.step)
+    render_mode_nav()
     st.divider()
 
-    step = st.session_state.step
-    # D2: 이 단계에서 '지금 할 일' 한 줄 안내(설명은 각 단계 화면 상단 caption 에).
-    if step in STEP_TODO:
-        st.info(f"👣 지금 할 일 — {STEP_TODO[step]}")
-
-    if step in STEPS_NEED_KEY and api_key is None:
-        st.error(NO_KEY_MSG)
-    elif step == 1:
-        render_step_upload(ctx)
-    elif step == 2:
-        render_step_ingest(ctx)
-    elif step == 3:
-        render_review_tab(gate)
-    elif step == 4:
-        render_step_index(ctx, gate)
-    elif step == 5:
-        render_rag_tab(gate)
-    elif step == 6:
+    mode = st.session_state.mode
+    if mode == "signal":
         render_step_signal(ctx)
 
-    # D2: 다음 단계로 가는 행동 안내(앞 단계 산출물이 준비됐으면 버튼, 아니면 잠금 안내)
-    render_next_step_nav(ctx, step)
+    elif mode == "qa":
+        # RAG_FAKE_LLM(결정적 스텁)은 과금이 없으므로 키 없이 허용(E2E·데모용).
+        if api_key is None and not os.getenv("RAG_FAKE_LLM"):
+            st.error(NO_KEY_MSG)
+        elif ctx["index_count"] == 0:
+            st.info("아직 인덱스가 없습니다. 🛠 데이터 준비에서 업로드→인제스트→검수→인덱싱을 "
+                    "마치면 질의할 수 있습니다.")
+            if st.button("🛠 데이터 준비로 이동", key="goto_prep_from_qa"):
+                st.session_state.mode = "prep"
+                st.rerun()
+        else:
+            render_rag_tab(gate)
+
+    else:   # prep — 데이터 준비 스텝퍼(1 업로드 → 2 인제스트 → 3 검수 → 4 인덱싱)
+        render_stepper_nav(ctx, st.session_state.step)
+        step = st.session_state.step
+        # D2: 이 단계에서 '지금 할 일' 한 줄 안내(설명은 각 단계 화면 상단 caption 에).
+        if step in STEP_TODO:
+            st.info(f"👣 지금 할 일 — {STEP_TODO[step]}")
+
+        if step in STEPS_NEED_KEY and api_key is None:
+            st.error(NO_KEY_MSG)
+        elif step == 1:
+            render_step_upload(ctx)
+        elif step == 2:
+            render_step_ingest(ctx)
+        elif step == 3:
+            render_review_tab(gate)
+        elif step == 4:
+            render_step_index(ctx, gate)
+
+        # D2: 다음 단계로 가는 행동 안내(마지막 단계 뒤엔 대시보드로 돌아가는 고리)
+        render_next_step_nav(ctx, step)
+
     render_log_panel()
 
 
