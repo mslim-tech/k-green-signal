@@ -1,6 +1,6 @@
 # tests/e2e/test_rag.py
 # -----------------------------------------------------------------------------
-# 💬 질의(Q&A) 모드:
+# 💬 AI에게 묻기 모드:
 #   - 질문하면 출처 인용([출처:)이 포함된 답변과 처리 시간이 보인다.
 #   - 근거 출처 expander 에 스텁 근거가 카드로 보인다(없는 PDF 라 페이지 토글은 미노출).
 #   - advise 모드는 스텁의 헤딩 계약이 KEEP/ADD/DROP/FIX 카드로 구조화 렌더된다.
@@ -13,11 +13,11 @@ from playwright.sync_api import Page, expect
 
 
 def _goto_qa(page: Page):
-    """ 💬 질의 모드로 진입 — 전환 완료를 센티넬로 기다린다(랜딩 신호등 화면의
+    """ 💬 AI에게 묻기 모드로 진입 — 전환 완료를 센티넬로 기다린다(랜딩 신호등 화면의
         '🔎 질문/키워드' 입력이 '질문' 정규식에 먼저 걸리는 경합 방지). """
     page.goto("/")
     expect(page.get_by_text(re.compile("실시간 신호등")).first).to_be_visible(timeout=30000)
-    page.get_by_role("button", name=re.compile(r"질의\(Q&A\)")).click()
+    page.get_by_role("button", name=re.compile("AI에게 묻기")).click()
     expect(page.locator("[data-testid='mode-status']")).to_have_text("qa", timeout=15000)
 
 

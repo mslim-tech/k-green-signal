@@ -5,7 +5,7 @@
 # 이 파일의 역할(오케스트레이션만 — 각 화면은 ui/ 모듈):
 #   🚦 대시보드    : 신호등(연도별 추세). 정형 데이터가 있으면 여기가 첫 화면(랜딩).
 #                   API Key·인덱스 없이도 동작한다(정형 CSV 만 읽음).
-#   💬 질의(Q&A)  : 인덱스에서 검색해 출처 인용/데이터 기반 제언 답변(키 필요).
+#   💬 AI에게 묻기 : 인덱스에서 검색해 출처 인용/데이터 기반 제언 답변(키 필요).
 #   🛠 데이터 준비 : 1 업로드 → 2 인제스트 → 3 검수 → 4 인덱싱 스텝퍼(게이트 순서 유지).
 # -----------------------------------------------------------------------------
 
@@ -54,7 +54,7 @@ def get_api_key():
 
 
 # -----------------------------------------------------------------------------
-# 2) 가이드 스텝퍼 — 업로드 → 인제스트 → 검수 → 인덱싱 → 질의(Q&A)
+# 2) 3모드 — 🚦 대시보드 · 💬 AI에게 묻기 · 🛠 데이터 준비(업로드→인제스트→검수→인덱싱)
 #    탭 대신 '순서가 있는 단계'로 안내한다. 각 단계는 앞 단계가 끝나야 열린다.
 #    (각 단계 화면은 ui/ 모듈로 분리 — 여기선 순서·게이트·상태 오케스트레이션만)
 # -----------------------------------------------------------------------------
@@ -67,7 +67,7 @@ NO_KEY_MSG = (
 # 최상위 모드 — 결과(대시보드·질의)와 관리(데이터 준비)를 분리한다.
 MODES = [
     ("signal", "🚦 대시보드"),
-    ("qa", "💬 질의(Q&A)"),
+    ("qa", "💬 AI에게 묻기"),
     ("prep", "🛠 데이터 준비"),
 ]
 
@@ -99,7 +99,7 @@ def render_next_step_nav(ctx: dict, step: int) -> None:
             if st.button("🚦 대시보드 보기", type="primary", key="goto_dashboard"):
                 st.session_state.mode = "signal"
                 st.rerun()
-            st.caption("💬 질의(Q&A)에서 데이터에 대해 질문할 수도 있습니다.")
+            st.caption("💬 AI에게 묻기에서 데이터에 대해 질문할 수도 있습니다.")
         return
     nxt = step + 1
     label = next(lbl for n, lbl, _ in STEPS if n == nxt)
@@ -223,26 +223,31 @@ def render_status_panel(ctx: dict, gate=None) -> None:
         st.metric("인덱싱된 청크", ctx["index_count"])
         st.metric("검수 남은 high", ctx["remaining_high"])
 
-        # D5: 인덱스 정합(현재 데이터가 게이트를 통과하는가)
+        # D5: 인덱스 정합(현재 데이터가 게이트를 통과하는가) — 좁은 폭에서 단어가 잘리지
+        # 않게 라벨/내용을 짧은 줄로 나눈다(마크다운 hard break).
         if ctx["index_count"] > 0 and gate is not None:
             if gate.ok:
-                st.success("인덱스 정합: ✅ 게이트 통과 데이터")
+                st.success("✅ **인덱스 정합**  \n게이트 통과 데이터")
             else:
-                st.warning("인덱스 정합: ⚠️ 미통과(미확정/빈값/미검수 포함 가능) — 검수 후 재인덱싱 권장")
+                st.warning("⚠️ **인덱스 정합** — 미통과  \n"
+                           "미확정·빈값·미검수 포함 가능  \n검수 후 재인덱싱 권장")
 
         st.divider()
-        # 다음 할 일 안내(모드 인지형 — 어디로 가야 하는지까지 알려준다)
+        # 다음 할 일 안내(모드 인지형). 좁은 사이드바에서 단어가 중간에 잘리지 않게
+        # '무엇을(굵게)'과 '어떻게'를 짧은 두 줄로 나눈다(마크다운 hard break: 두 칸+개행).
         if ctx["pdf_count"] == 0:
-            nxt = "🛠 데이터 준비 1단계에서 보고서 PDF를 업로드하세요."
+            nxt = "🛠 **데이터 준비 1단계**  \nPDF를 업로드하세요."
         elif not ctx["review_queue"]:
-            nxt = "🛠 데이터 준비 2단계에서 인제스트를 실행하세요."
+            nxt = "🛠 **데이터 준비 2단계**  \n인제스트를 실행하세요."
         elif ctx["remaining_high"] > 0:
-            nxt = f"🛠 데이터 준비 3단계에서 high {ctx['remaining_high']}건을 검수하세요."
+            nxt = f"🛠 **데이터 준비 3단계**  \nhigh {ctx['remaining_high']}건을 검수하세요."
         elif ctx["index_count"] == 0:
-            nxt = "🛠 데이터 준비 4단계에서 인덱싱하세요."
+            nxt = "🛠 **데이터 준비 4단계**  \n인덱싱하세요."
         else:
-            nxt = "준비 완료 — 🚦 대시보드에서 추세를 보고, 💬 질의에서 질문하세요."
-        st.info(f"👉 다음 할 일: {nxt}")
+            nxt = ("준비 완료 ✅  \n"
+                   "🚦 **대시보드**에서 추세 보기  \n"
+                   "💬 **AI에게 묻기**로 질문하기")
+        st.info(f"👉 **다음 할 일**  \n{nxt}")
 
 
 def render_log_panel() -> None:
@@ -280,7 +285,7 @@ def main():
 
     st.set_page_config(page_title="k-green-signal", layout="wide")
     st.title("🚦 대한민국 친환경 소비 인지도 실시간 신호등")
-    st.caption("k-green-signal · 🚦 대시보드 — 💬 질의(Q&A) — 🛠 데이터 준비(업로드→인제스트→검수→인덱싱)")
+    st.caption("k-green-signal · 🚦 대시보드 — 💬 AI에게 묻기 — 🛠 데이터 준비(업로드→인제스트→검수→인덱싱)")
 
     api_key = get_api_key()
     ctx = build_ctx()
@@ -320,7 +325,7 @@ def main():
             st.error(NO_KEY_MSG)
         elif ctx["index_count"] == 0:
             st.info("아직 인덱스가 없습니다. 🛠 데이터 준비에서 업로드→인제스트→검수→인덱싱을 "
-                    "마치면 질의할 수 있습니다.")
+                    "마치면 AI에게 물어볼 수 있습니다.")
             if st.button("🛠 데이터 준비로 이동", key="goto_prep_from_qa"):
                 st.session_state.mode = "prep"
                 st.rerun()

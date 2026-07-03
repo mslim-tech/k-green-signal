@@ -1,6 +1,6 @@
 # tests/e2e/test_stepper.py
 # -----------------------------------------------------------------------------
-# 3모드 네비(🚦 대시보드/💬 질의/🛠 데이터 준비) + 데이터 준비 스텝퍼:
+# 3모드 네비(🚦 대시보드/💬 AI에게 묻기/🛠 데이터 준비) + 데이터 준비 스텝퍼:
 #  - 정형 데이터가 있으면 자동으로 🚦 대시보드에 랜딩한다("결과 먼저").
 #  - 🛠 데이터 준비로 들어가면 4단계 스텝퍼가 그려지고, 이동/게이트가 동작한다.
 # -----------------------------------------------------------------------------
@@ -28,7 +28,7 @@ def test_mode_nav_and_prep_steps(page: Page, base_url: str):
     _goto(page)
     # '결과 먼저' — 정형 데이터가 있으므로 자동으로 대시보드에 랜딩한다.
     expect(page.locator("[data-testid='mode-status']")).to_have_text("signal", timeout=15000)
-    for frag in ["🚦 대시보드", "💬 질의(Q&A)", "🛠 데이터 준비"]:
+    for frag in ["🚦 대시보드", "💬 AI에게 묻기", "🛠 데이터 준비"]:
         expect(page.get_by_role("button", name=re.compile(re.escape(frag)))).to_be_visible()
     # 데이터 준비로 들어가면 4단계 스텝퍼가 보이고 기본 단계는 1(업로드).
     page.get_by_role("button", name=re.compile("데이터 준비")).click()
