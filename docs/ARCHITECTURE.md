@@ -34,10 +34,11 @@
    │           [Vector DB]  Chroma              ← 검색용. 청크마다 출처 메타 보존
    │                │
    │                ▼  (4) 검색 + 근거 답변
-   │           [RAG 답변]  app.py Q&A 탭         ← page/구절 인용. 근거 없으면 "없음"
+   │           [RAG 답변]  ui/rag.py 💬 질의 모드  ← page/구절 인용. 근거 없으면 "없음"
    │
-   ▼  (5) 검수 (사람)
-[보정]  corrections.jsonl                       ← 사람이 grounding 보고 확정한 것만
+   ▼  (5) 검수 (사람 + LLM 검증)
+[보정]  corrections.jsonl                       ← 사람 확정 + LLM 원문 재판독 확정(llm_verified)
+                                                   — 같은 행에 사람 기록이 있으면 항상 사람이 우선
 ```
 
 **불변 규칙(원칙 구현):**
@@ -56,7 +57,7 @@
 | `parsing.py` | 본문을 문항 블록으로 분리(서술형 수치) | 있음 |
 | `extract.py` | 블록 텍스트 → LLM 구조화 추출 | 있음 |
 | `extract_vision.py` | **표 블록: 페이지 이미지 → 멀티모달 추출** | 있음(신규) |
-| `refill_vision.py` | 빵구 블록 비전 재추출 → **검토 후보 생성**(자동 데이터 반영 최소화) | 있음(정책 재검토) |
+| `refill_vision.py` | 빵구 블록 비전 재추출 → **검토 후보 생성**(`vision_candidates.csv` 전용, 자동 데이터 반영 없음) | 있음 |
 
 **출처(provenance) 필수 항목** — 추출 레코드마다:
 `source`(파일), `page_start/end`, `section/subsection`, `figure/table id`(예 `<표 3-60>`), 그리고 가능하면 **`source_quote`(원문 구절)**. 이게 grounding의 씨앗.
@@ -119,14 +120,18 @@
 - **`mode="advise"`(데이터 기반 제언)**: `_advise_retrieve`로 **다면 검색** — ①추세(질문 그대로) ②장벽/개선 ③**방법론 지식청크(`parser_type="methodology"`)** ④**외부 맥락 지식청크(`parser_type="external_context"`)** 네 축을 `chunk_id`로 병합·중복제거해 모은다. 프롬프트가 **KEEP/ADD/DROP/FIX** 구조를 강제하고, 💡제언(결론)을 위에·📊근거 사실을 아래에 두며, 문서상 척도 변경은 '실제 추세'가 아니라 **FIX(척도 표준화) 대상**으로 지목하고, 외부 맥락이 있으면 **데이터 변화를 그해 사건과 엮어 '상황 해석'**을 덧붙이되 **상관·인과를 구분**하게 한다.
 - **상세도 `요약 / 표준 / 상세`(`DETAIL_GUIDE`)**: 같은 근거로 서술 길이·깊이만 달리한다(프롬프트 지침만, 토큰 상한 변경 없음). 두 모드 공통.
 
-`app.py`: 기존 "문서 Q&A" 탭을 **이 RAG 파이프라인으로 교체**(현재 통째-프롬프트 Baseline 폐기). "검수" 탭은 유지.
+**앱 구조(2026-07-03 "결과 먼저, 관리 나중" 개편)**: `app.py`는 3모드 — **🚦 대시보드**(정형 CSV가 있으면 랜딩, 키·인덱스 불필요) · **💬 질의(Q&A)**(위 RAG 파이프라인, 키 필요) · **🛠 데이터 준비**(업로드→인제스트→검수→인덱싱 4단계 게이트 스텝퍼). 질의 화면은 advise 답변을 헤딩 계약(`#### KEEP/ADD/DROP/FIX`) + `parse_advise_sections`로 **갈래별 카드로 구조화**(파싱 실패 시 원문 폴백 — 구조 합성 없음)하고, 출처는 카드 + **온디맨드 원문 페이지 토글**(PDF 있을 때만)로 보여주며, 같은 입력의 답변은 세션에 캐시해 재생성(과금)을 막는다.
 
 ---
 
-## 6. 검수 레이어 (5) — 사람 (기존 5단계)
+## 6. 검수 레이어 (5) — 하이브리드(사람 + LLM 검증)
 
-- `review.py` + `corrections.py` + app.py 검수 탭(완성됨).
-- **이 레이어가 "추측 격리"의 핵심**: 비전 불일치·플래그·저신뢰가 모두 여기로 모이고, 사람이 출처 보고 확정한 것만 데이터가 됨.
+- `rag/transform/review.py`(큐 생성) + `rag/curate/corrections.py`(기록) + `ui/review.py`(화면, 데이터 준비 3단계).
+- **이 레이어가 "추측 격리"의 핵심**: 비전 불일치·플래그·저신뢰가 모두 여기로 모인다. 확정 경로는 둘:
+  - **사람 검수** — 표(브라우즈) 또는 **순차 검수 모드**(저장하면 자동으로 다음 미검수 행). 검수 상세에 **원문 PDF 페이지 미리보기**(extract_vision 렌더러 재사용, PDF 없으면 폴백)를 렌더해 "사람이 원문 보고 확정"을 앱 안에서 완결. 상태 라디오 기본값은 비변조인 '원래 값 맞음'.
+  - **LLM 검증(`rag/curate/adjudicate.py`)** — 게이트가 차단하는 '불확실 high'를 원문 페이지 비전으로 독립 재판독해 agree/correct만 `status=llm_verified`로 확정, uncertain·빈 값 지지는 에스컬레이션(값을 쓰지 않음). **사람 우선 가드**: 실행 중 사람이 같은 행을 검수하면 호출 전·쓰기 직전 이중 재확인으로 건너뛴다.
+- 비전 후보의 **기각은 `confirmed`(원래 값 유지)로 기록** — `skip`으로 기록하면 chunking이 그 행 자체를 인덱스에서 제외해 버리기 때문(조용한 데이터 소실 방지).
+- UI 는 `llm_verified`를 fixed 와 같은 규칙으로 반영(`effective_value`/`needs_value`) — 인덱싱(`apply_corrections`)과 화면이 같은 값을 본다.
 
 ---
 
@@ -139,7 +144,7 @@
 - **이례적 급변 분리**(`LARGE_YOY_PP=15`): 설계 동일 구간이라도 단년 |Δ|가 15%p를 넘으면 설문 변경 가능성이 있어 헤드라인에서 빼고 '검증 필요'로 돌린다. 근거는 실측 — 설계 동일(2024→2025) 신호의 |Δ| 중앙값 6.6%p, 15%p 초과는 상위 10%(실제 변화라고 단정하지 않되 원문 확인 전엔 헤드라인 안 함).
 - 신규 API: `signaled_movers()`(실제 변화만), `caveat_breaks()`(해석 유의), `Series.spans_scale_break`·`Series.is_aggregate`.
 
-**대시보드(`ui/signal.py`)** — 의사결정용 **3단 분리**로 오독을 막는다: **🟢 "📊 주목할 실제 변화"**(설계 동일 2024→2025 + 단년 크기 정상 |Δ|≤15%p → 바로 판단) · **🔶 "큰 변화지만 검증 필요"**(설계 동일이나 |Δ|>15%p → 원문 확인 후) · **⚠️ "해석 유의"**(2023→2024 개편·문서상 척도 변경 → 실제 변화 아닐 수 있음). 카드는 테두리 컨테이너에 지표명·응답라벨을 **잘림 없이 전부** 보여준다(`_mover_card`). **"💡 2026 설문 설계 제언 받기"** 버튼이 advise 모드로 연결한다. 단일 연도만 조사된 문항(판단 기준·구매 장벽)은 추세 대신 **그 해 스냅샷(빈도순 파레토)**으로 보여주고 단일 연도임을 명시한다(`_render_single_year_snapshot`). 추세 차트는 **연도 축을 quantitative→ordinal(`연도:O`)로 바꿔** 중복 눈금 렌더링을 고치고, 없는 연도는 선을 끊어(null 갭 — 가짜 보간 없음) 범례 라벨도 잘리지 않게(`labelLimit=0`) 했다.
+**대시보드(`ui/signal.py`)** — **앱의 랜딩 화면**(정형 CSV가 있으면 앱을 열자마자 표시 — "결과 먼저"). 의사결정용 **3단 분리**로 오독을 막는다: **🟢 "📊 주목할 실제 변화"**(설계 동일 2024→2025 + 단년 크기 정상 |Δ|≤15%p → 바로 판단) · **🔶 "큰 변화지만 검증 필요"**(설계 동일이나 |Δ|>15%p → 원문 확인 후) · **⚠️ "해석 유의"**(2023→2024 개편·문서상 척도 변경 → 실제 변화 아닐 수 있음). 카드는 테두리 컨테이너에 지표명·응답라벨을 **잘림 없이 전부** 보여준다(`_mover_card`). **"💡 2026 설문 설계 제언 받기"** 버튼이 advise 모드로 연결한다. 단일 연도만 조사된 문항(판단 기준·구매 장벽)은 추세 대신 **그 해 스냅샷(빈도순 파레토)**으로 보여주고 단일 연도임을 명시한다(`_render_single_year_snapshot`). 추세 차트는 **연도 축을 quantitative→ordinal(`연도:O`)로 바꿔** 중복 눈금 렌더링을 고치고, 없는 연도는 선을 끊어(null 갭 — 가짜 보간 없음) 범례 라벨도 잘리지 않게(`labelLimit=0`) 했다.
 
 ---
 
@@ -148,27 +153,27 @@
 > §1의 "코드 조직 (2026-07-02)"대로 `rag/`는 서브패키지 구조다. 실행은 `python -m rag.<pkg>.<mod>`.
 
 ```
-app.py                  # 진입점 셸(309행): 라우팅·가이드 스텝퍼·상태/🩺 로그 패널 + main()
-ui/                     # app.py 에서 추출한 UI 패키지 (단계·탭 화면 전량 분리)
-  signal.py             #   6단계 🚦 신호등 대시보드(의사결정 프레이밍)
-  review.py             #   5단계 검수 탭 + 비전 후보 + LLM 검증(adjudicate)
-  ingest.py             #   1·2단계 업로드·인제스트 화면 + 진행 모니터
-  rag.py                #   5단계 RAG 질의 탭(사실 인용/데이터 기반 제언 · 상세도)
-  index.py              #   4단계 인덱싱 화면(준비 게이트)
-  common.py             #   공유 상수·경로(REVIEW_QUEUE_PATH · VISION_CANDIDATES_PATH · DATA_DIR)
+app.py                  # 진입점 셸(355행): 3모드 라우팅(🚦 대시보드 랜딩/💬 질의/🛠 데이터 준비)·상태/🩺 로그 패널 + main()
+ui/                     # app.py 에서 추출한 UI 패키지 (모드·단계 화면 전량 분리)
+  signal.py             #   🚦 신호등 대시보드(901행) — 랜딩 화면(의사결정 프레이밍)
+  review.py             #   데이터 준비 3단계 검수(555행) — 순차 모드·원문 페이지 + 비전 후보 + LLM 검증(adjudicate)
+  ingest.py             #   데이터 준비 1·2단계 업로드·인제스트(356행) + 진행 모니터
+  rag.py                #   💬 질의 모드(202행) — 사실 인용/제언 카드 · 상세도 · 출처 카드
+  index.py              #   데이터 준비 4단계 인덱싱(58행, 준비 게이트)
+  common.py             #   공유 상수·경로(22행 — OUTPUT_DIR 경유 REVIEW_QUEUE_PATH 등)
 curation/               # 사람 큐레이션 참조 데이터(설정 아님, 커밋됨)
   methodology_notes.json #   방법론 '비교 유의' 지식(척도 변경 등) → parser_type='methodology' 로 인덱싱
-  external_context.json  #   외부 맥락(정책·사건) — 신호등 요약 참고
+  external_context.json  #   외부 맥락(정책·사건) → parser_type='external_context' 로 인덱싱 + 신호등 패널
   mapping_review.csv     #   과병합 교정 워크시트
 rag/
   core/                 # config(모델 중앙관리)·paths(경로 단일화)·logging_setup
   ingest/               # 0~2 ingestion·parsing·extract·extract_vision(+oldtable)
   transform/            # 3~4 standardize·std_aliases·refine·dedup·flags·review
-  curate/               # refill_vision·corrections·integrate_oldyears·validate·methodology
+  curate/               # corrections·refill_vision·adjudicate·validate·methodology·external_context·integrate_oldyears
   retrieval/            # 6 chunking·index·routing·retriever·answer
   signals.py            # 🚦 신호등 — 연도 추세 신호(순수 함수)
   pipeline.py           #    인제스트 단계를 python -m 서브프로세스로 실행+로그 캡처
-eval/                   # 6.8 평가 질문
+eval/                   # 평가 골드 9케이스(cite 6 + advise 3) + run_eval.py 채점 러너
 outputs/                # 산출물 + chroma/
 ```
 
@@ -191,4 +196,5 @@ outputs/                # 산출물 + chroma/
 
 - **임베딩 대상 언어**: 한국어 문항 — `text-embedding-3-small`로 충분한지 평가셋으로 확인(부족 시 교체 검토).
 - **하이브리드 검색**: 1차는 벡터만, 키워드(BM25) 결합은 평가 후.
-- **refill 휴리스틱 처리**: 원칙상 자동 덮어쓰기를 더 줄이고 검토큐로 보낼지 — 사용자 확인 필요.
+- ~~**refill 휴리스틱 처리**~~ → 해소(후보 전용으로 확정): refill 은 `vision_candidates.csv`만 쓰고 canonical 은 건드리지 않으며, 사람이 검수 화면에서 확정/기각한다.
+- **`llm_verified` 사람 승인 단계**: LLM 검증 확정이 사람 사인오프 없이 게이트를 통과·색인됨 — 승인 단계 추가 여부는 명시적 결정 필요([`PLAN.md`](./PLAN.md) '리뷰 이연 항목' ①, hybrid Stage 3 후보).

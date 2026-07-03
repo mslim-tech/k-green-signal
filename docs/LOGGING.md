@@ -20,7 +20,8 @@
 | 5 | advise 답변(KEEP/ADD/DROP/FIX)이 통짜 마크다운, 출처 클릭 불가 | 프롬프트 **헤딩 계약** + `parse_advise_sections`(합성 금지·실패 시 원문 폴백) → 갈래별 배지 카드. 출처는 카드(연도·std_id 배지·유사도)+**온디맨드 원문 페이지 토글**(PDF 있을 때만) |
 | 6 | RAG·검수 E2E 부재, eval 은 cite 6케이스뿐 | E2E +3(출처 카드 폴백·advise 구조화·순차 검수), 파서 단위 3, eval advise 골드 3(척도 FIX·인과 고지) + `run_eval.py` mode 지원. **단위 56 + E2E 21 = 77 passed**. 실 LLM eval **8/9** — advise 신규 3건 전부 통과, 실패 1건은 기존 데이터 빵구(2023 환경표지_확대희망품목 1행만 추출 — PLAN '알려진 데이터 빵구' 참고, 이번 변경과 무관) |
 | 7 | UI 만 실제 `outputs/`를 읽는 경로 불일치(E2E 격리 우회) | `ui/common.py`가 `rag.core.paths.OUTPUT_DIR`(env `RAG_OUTPUT_DIR` 반영)를 쓰도록 통일 |
-| 8 | (/ship 사전 리뷰) 검수 UI 가 `llm_verified` 미처리 — LLM 확정값이 빈 행으로 보이고 기본 저장이 조용히 되돌림 + 리뷰 발견 9건 | `effective_value`/`needs_value`/`STATUS_LABELS`에 llm_verified 반영, adjudicate 큐 부재 크래시·과금 상한·모니터 rc 정직성 수정, 연도옵션 캐시, 집계라벨 1순위 제외, 파서 서문 보존 + **회귀 테스트 16건**(신호 프레이밍·하이브리드 게이트·다중 PDF 신선도) → **93 passed** |
+| 8 | (/ship 사전 리뷰) 검수 UI 가 `llm_verified` 미처리 — LLM 확정값이 빈 행으로 보이고 기본 저장이 조용히 되돌림 + 리뷰 발견 다수 | `effective_value`/`needs_value`/`STATUS_LABELS`에 llm_verified 반영, adjudicate 큐 부재 크래시·과금 상한·모니터 rc 정직성 수정, 연도옵션 캐시, 집계라벨 1순위 제외, 파서 서문 보존 + 회귀 테스트 16건 → 93 passed |
+| 9 | (/ship 레드팀·적대 리뷰) adjudicate 가 실행 중 **사람 검수를 덮어씀**(최신 기록 우선이 사람 판단을 뒤집음) · 비전 후보 **기각(skip)이 원본 행을 인덱스에서 소실** · 빈 값 행 LLM agree 가 결측을 매장 · QA 출처 토글이 rerun 마다 **유료 답변 재생성** · `SOURCE_CSV` 임포트 고정으로 첫 세션이 pre-dedup 데이터 색인 | **사람 우선 가드**(호출 전+쓰기 직전 이중 재확인, skipped 계수) · 기각=`confirmed`(원래 값 유지) + 버튼 정체성 키 · 빈 값 agree 에스컬레이션 · 답변 세션 캐시 · `chunking.source_csv()` 호출 시점 해석 · 집중 모드 막다른 길 자동 해제 · corrections 파싱 실패 경고 로그 · "검색은 키 없이" 문서 정정 + 회귀 테스트 2건 → **95 passed**(단위 74 + E2E 21). 설계성 이연 8건은 PLAN '리뷰 이연 항목' |
 
 커밋: `fix(app): align in-app actions with pipeline intent` → `feat(app): promote signal dashboard to landing with 3-mode IA` → `feat(review): sequential review mode with source-page preview` → `feat(rag): structured advise rendering and source cards`.
 
