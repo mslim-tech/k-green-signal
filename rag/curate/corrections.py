@@ -116,8 +116,8 @@ def add_correction(
 
     매개변수:
       row       - 검수한 원본 행(dict). 여기서 식별 키와 old_value 를 뽑는다.
-      status    - 'fixed' / 'confirmed' / 'skip' 중 하나.
-      new_value - status='fixed' 일 때 고친 값. (그 외에는 빈 값이어도 됨)
+      status    - 'fixed' / 'confirmed' / 'skip' / 'llm_verified'(LLM 검증) 중 하나.
+      new_value - status 가 'fixed'/'llm_verified' 일 때 반영되는 값. (그 외에는 빈 값이어도 됨)
       field     - 어떤 컬럼을 고쳤는지(기본 'value').
       note      - 사람이 남기는 메모(선택).
       reviewer  - 검수자 이름(선택).
@@ -252,7 +252,7 @@ def confirmed_only_rows(existing_rows: list[dict],
 def apply_corrections(rows: list[dict], path: Path = CORRECTIONS_PATH) -> tuple[list[dict], int]:
     """ (5.4 재정제용) 보정값을 데이터 행들에 덮어쓴다.
 
-    - status='fixed' 인 최신 보정만 반영한다(confirmed/skip 은 값 변경 없음).
+    - status='fixed'/'llm_verified' 인 최신 보정만 반영한다(confirmed/skip 은 값 변경 없음).
     - 원본 rows 는 건드리지 않고 '복사본'을 고쳐서 돌려준다.
     - 반환: (보정 적용된 새 rows, 실제로 값을 바꾼 건수)
     """

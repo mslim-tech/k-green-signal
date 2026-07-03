@@ -19,6 +19,15 @@ def _cached_examples() -> list[str]:
     return suggest_questions(4)
 
 
+# 연도 옵션 — 매 rerun 전체 CSV 재파싱을 피하려고 소스 mtime 을 캐시 키로 쓴다
+# (재인제스트로 파일이 바뀌면 자동 갱신).
+@st.cache_data(show_spinner=False, max_entries=2)
+def _year_options(mtime: float) -> list[str]:
+    from rag.retrieval import chunking
+    from rag import signals
+    return ["전체"] + [str(y) for y in signals.dataset_years(chunking.load_rows())]
+
+
 def _first_page(page_str: str) -> int | None:
     """ '103-105' 같은 페이지 표기에서 첫 페이지 번호만 뽑는다(없으면 None). """
     m = re.match(r"\s*(\d+)", page_str or "")
@@ -106,7 +115,7 @@ def render_rag_tab(gate=None):
         if examples:
             st.caption("💡 예시 질문 — 클릭하면 채워집니다")
             for i, ex in enumerate(examples):
-                if st.button(ex, key=f"rag_ex_{i}", use_container_width=True):
+                if st.button(ex, key=f"rag_ex_{i}", width="stretch"):
                     st.session_state["rag_question"] = ex
                     st.rerun()
 
@@ -117,8 +126,7 @@ def render_rag_tab(gate=None):
         # 연도 필터는 데이터에서 도출(하드코딩 금지) — 새 연도 보고서를 올리면 자동 반영.
         try:
             from rag.retrieval import chunking
-            from rag import signals
-            year_opts = ["전체"] + [str(y) for y in signals.dataset_years(chunking.load_rows())]
+            year_opts = _year_options(chunking.SOURCE_CSV.stat().st_mtime)
         except Exception:
             year_opts = ["전체"]   # 정형 데이터가 아직 없으면 필터 없이 진행
         year = st.selectbox("연도 필터", year_opts, index=0)

@@ -27,7 +27,8 @@ logger = logging.getLogger("app")   # app.py 와 같은 로거 이름(검수·ad
 # -----------------------------------------------------------------------------
 
 # 검수 큐 캐시 — 파일 mtime 을 캐시 키로 써서, 재인제스트로 파일이 바뀌면 자동 무효화된다.
-@st.cache_data(show_spinner=False)
+# max_entries=2: 최신 스냅샷만 유용한데 재인제스트마다 옛 스냅샷이 쌓이는 것 방지.
+@st.cache_data(show_spinner=False, max_entries=2)
 def _load_review_queue_cached(mtime: float):
     with open(REVIEW_QUEUE_PATH, "r", encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
@@ -65,15 +66,18 @@ STATUS_LABELS = {
     corrections.STATUS_FIXED: "값 고침",
     corrections.STATUS_CONFIRMED: "원래 값 맞음",
     corrections.STATUS_SKIP: "보류",
+    corrections.STATUS_LLM_VERIFIED: "LLM 검증 확정",
 }
 
 
 def effective_value(row, latest):
     """ 검수 정정이 '반영된' 값을 돌려준다.
-        - 'fixed'(값 고침)면 고친 값, 그 외(confirmed/없음)면 원본 값.
+        - 'fixed'(값 고침)·'llm_verified'(LLM 검증 확정)면 고친/확정된 값,
+          그 외(confirmed/없음)면 원본 값. (인덱싱 시 apply_corrections 와 같은 규칙)
         review_queue 표에 '정정값'으로 보여주거나, 수정 폼 기본값으로 쓴다. """
     rec = latest.get(corrections.row_key(row) + ("value",))
-    if rec and rec.get("status") == corrections.STATUS_FIXED:
+    if rec and rec.get("status") in (corrections.STATUS_FIXED,
+                                     corrections.STATUS_LLM_VERIFIED):
         return rec.get("new_value", "")
     return row.get("value", "")
 
@@ -82,10 +86,11 @@ def needs_value(row, latest) -> bool:
     """ 이 행이 '값이 비어 반드시 검수해야 하는' 행인가.
         반영값(정정 포함)이 숫자로 읽히지 않으면 True.
 
-        단, 사람이 이미 검수해 '빈 값이 맞다(confirmed)'거나 '제외(skip)'로 처리한 행은
-        더 이상 검수 대상이 아니다 — 같은 빈칸을 반복해 들이밀지 않는다(사용자 요청). """
+        단, 이미 처리된 행 — 사람이 '빈 값이 맞다(confirmed)'/'제외(skip)' 했거나
+        LLM 검증(llm_verified)으로 확정된 행 — 은 더 이상 검수 대상이 아니다. """
     rec = latest.get(corrections.row_key(row) + ("value",))
-    if rec and rec.get("status") in (corrections.STATUS_CONFIRMED, corrections.STATUS_SKIP):
+    if rec and rec.get("status") in (corrections.STATUS_CONFIRMED, corrections.STATUS_SKIP,
+                                     corrections.STATUS_LLM_VERIFIED):
         return False
     v = (effective_value(row, latest) or "").strip()
     if not v:
@@ -239,7 +244,7 @@ def _candidate_row(c: dict) -> dict:
     }
 
 
-def render_vision_candidates(latest: dict) -> None:
+def render_vision_candidates() -> None:
     """ 비전 재판독이 제안한 후보를 (제안값+출처)로 보여주고, 사람이 확정/기각하게 한다.
         확정 → corrections.jsonl(fixed) 로만 기록(정형 CSV 는 안 건드림 — '추측은 데이터가 아니다').
         이미 검수(확정/기각)된 후보는 숨긴다(반복 노출 방지). """
@@ -342,8 +347,15 @@ def _adjudicate_monitor() -> None:
             st.session_state.adjudicate_proc = None
             st.rerun(scope="app")
     else:
-        st.success(f"✅ LLM 검증 완료 ({dt:.0f}s). 게이트를 다시 계산합니다.")
-        logger.info("LLM 검증 완료: run=%s", adj["run_id"])
+        # 크래시(rc≠0)를 '완료'로 보고하지 않는다 — 인제스트 모니터와 같은 정직성.
+        # (복구 세션은 Popen 이 없어 rc 를 모름 → pid 종료를 완료로 간주할 수밖에 없음)
+        rc = proc.returncode if proc is not None else None
+        if rc not in (0, None):
+            st.error(f"⛔ LLM 검증 실패 (rc={rc}) — 아래 🩺 시스템 로그/run 로그를 확인하세요.")
+            logger.warning("LLM 검증 실패: run=%s rc=%s", adj["run_id"], rc)
+        else:
+            st.success(f"✅ LLM 검증 완료 ({dt:.0f}s). 게이트를 다시 계산합니다.")
+            logger.info("LLM 검증 완료: run=%s", adj["run_id"])
         pipeline.ADJ_STATE_FILE.unlink(missing_ok=True)
         st.session_state.adjudicate = None
         st.session_state.adjudicate_proc = None
@@ -356,8 +368,7 @@ def render_review_tab(gate=None):
     _adjudicate_recover()   # 새로고침 전 진행 중이던 LLM 검증이 있으면 이어받는다.
 
     # 비전 재판독 후보(있으면)를 먼저 처리 — 검수 부담을 줄이는 핵심(원클릭 확정).
-    latest_recs = corrections.latest_by_key()
-    render_vision_candidates(latest_recs)
+    render_vision_candidates()
 
     queue = load_review_queue()
     if queue is None:

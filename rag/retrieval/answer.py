@@ -205,7 +205,11 @@ def parse_advise_sections(text: str) -> AdviseSections | None:
         return None
     facts = "\n\n".join("\n".join(body).strip()
                         for kd, _, body in sections if kd == "FACTS").strip()
-    preamble = "\n".join(sections[0][2]).strip()
+    # 서문 = 첫 헤딩 이전(PRE) + 컨테이너 헤딩('### 💡 제언') 바로 아래 서술(SKIP) —
+    # LLM 이 쓴 텍스트를 조용히 버리지 않는다(구조화는 분할일 뿐).
+    pre_parts = [t for kd, _, body in sections if kd in ("PRE", "SKIP")
+                 for t in ["\n".join(body).strip()] if t]
+    preamble = "\n\n".join(pre_parts)
     return AdviseSections(preamble=preamble, advice=advice, facts=facts)
 
 

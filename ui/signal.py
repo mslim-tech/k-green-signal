@@ -154,12 +154,12 @@ def _mover_line(ind, s, threshold):
 def _render_status_scorecards(inds, max_cards: int = 6):
     """ 지표별 '현재 성적표': 검색어 관련 지표 각각을 카드로 —
         #1 최신값(현재 성적표) · #2 전년대비(↑↓, st.metric 이 화살표/색 자동) ·
-        #3 12개년 평균 대비(벤치마크). 데이터에 실제 있는 값만 쓴다(추측 없음). """
+        #3 보유 연도 평균 대비(벤치마크). 데이터에 실제 있는 값만 쓴다(추측 없음). """
     # 대표 라인(커버리지 최장) 기준으로 정렬 — 주요 헤드라인 지표가 앞에 오게.
     picks = sorted(inds, key=lambda i: len(_summary_headline_series(i).points),
                    reverse=True)[:max_cards]
     st.markdown("**📋 지표별 현재 성적표**")
-    st.caption("각 지표의 최신값 · 전년대비(↑↓) · 12개년 평균 대비")
+    st.caption("각 지표의 최신값 · 전년대비(↑↓) · 보유 연도 평균 대비")
     cols = st.columns(3)
     for i, ind in enumerate(picks):
         s = _summary_headline_series(ind)
@@ -184,10 +184,13 @@ def _render_status_scorecards(inds, max_cards: int = 6):
 
 
 def _top1_latest(ind):
-    """ 이 지표의 '최신 연도 1순위'(=최신 연도에서 값이 가장 큰 응답). (연도, 라벨, 값, 출처, page). """
+    """ 이 지표의 '최신 연도 1순위'(=최신 연도에서 값이 가장 큰 응답). (연도, 라벨, 값, 출처, page).
+        집계·비응답 라벨('기타'·'없음/모름' 등)은 순위에서 제외 — _raw_top1·RAG 프롬프트와 같은 규칙. """
     ly = max(p.year for s in ind.series for p in s.points)
     best = None
     for s in ind.series:
+        if signals.is_aggregation_label(s.label):
+            continue
         for p in s.points:
             if p.year == ly and (best is None or p.value > best[2]):
                 best = (ly, s.label, p.value, s.source, s.page)

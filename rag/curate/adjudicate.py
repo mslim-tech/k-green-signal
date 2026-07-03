@@ -87,8 +87,11 @@ def load_ungated_candidates() -> list[dict]:
     rows = chunking.load_rows()
     reviewed = corrections.reviewed_keys()
     confirmed = {corrections.row_key(r) for r in corrections.load_corrections()}
-    with open(REVIEW_QUEUE, encoding="utf-8-sig", newline="") as f:
-        queued = {corrections.row_key(r) for r in csv.DictReader(f)} if REVIEW_QUEUE.exists() else set()
+    # 큐 파일이 없을 수도 있다(신규 작업 폴더) — open 전에 존재 확인(없으면 빈 집합).
+    queued = set()
+    if REVIEW_QUEUE.exists():
+        with open(REVIEW_QUEUE, encoding="utf-8-sig", newline="") as f:
+            queued = {corrections.row_key(r) for r in csv.DictReader(f)}
     out = []
     for r in rows:
         if _num(r.get("value")) is None:
@@ -188,8 +191,10 @@ def main() -> None:
     limit = next((int(a) for a in sys.argv[1:] if a.isdigit()), 5)
     cands = load_candidates(limit)
     # 검수 큐를 거치지 않은 불확실 행(side-channel)도 검증 대상에 포함(중복 키 제외).
+    # 합친 뒤에도 limit 을 지킨다 — UI 가 약속한 '최대 N건'(=과금 상한)을 넘지 않게.
     seen = {corrections.row_key(r) for r in cands}
-    cands += [r for r in load_ungated_candidates() if corrections.row_key(r) not in seen]
+    extras = [r for r in load_ungated_candidates() if corrections.row_key(r) not in seen]
+    cands = (cands + extras)[:limit] if limit else cands + extras
     print(f"\n🤖 LLM 검증 대상 {len(cands)}건(불확실 high + side-channel) — 워커 {LLM_MAX_WORKERS}")
     logger.info("adjudicate 시작 — 대상 %d건 · 모델 %s", len(cands), VISION_MODEL)
     if not cands:
