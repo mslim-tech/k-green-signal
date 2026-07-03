@@ -1,4 +1,4 @@
-# rag/flags.py
+# rag/transform/flags.py
 # -----------------------------------------------------------------------------
 # 4단계 4.3: 의심값 자동 플래그
 #
@@ -22,29 +22,25 @@
 # 보안: API Key 는 .env 의 OPENAI_API_KEY 에서만 읽는다.
 #
 # 실행 방법(4.1 라벨 표준화가 끝난 뒤):
-#   uv run python rag/flags.py
+#   uv run python -m rag.transform.flags
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
 import csv
 import json
+import logging
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-try:
-    from rag.extract import get_client
-    from rag.config import STANDARDIZE_MODEL as MODEL_NAME
-except ImportError:
-    from extract import get_client
-    from config import STANDARDIZE_MODEL as MODEL_NAME
+from rag.ingest.extract import get_client
+from rag.core.config import STANDARDIZE_MODEL as MODEL_NAME
+from rag.core.logging_setup import setup_logging
+from rag.core.paths import OUTPUT_DIR
 
+logger = logging.getLogger("flags")
 
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
 # 4.2 중복정리(dedup) 결과가 있으면 그걸, 없으면 4.1 결과(clean)를 입력으로 쓴다.
 _DEDUP = OUTPUT_DIR / "standardized_long.dedup.csv"           # 4.2 산출 (있으면 우선)
 _CLEAN = OUTPUT_DIR / "standardized_long.clean.csv"           # 4.1 산출
@@ -98,7 +94,7 @@ def num(x):
 def load_rows() -> list[dict]:
     if not SOURCE_CSV.exists():
         raise RuntimeError(
-            f"{SOURCE_CSV} 가 없습니다. 먼저 rag/refine.py 로 4.1 라벨 표준화를 실행하세요."
+            f"{SOURCE_CSV} 가 없습니다. 먼저 rag/transform/refine.py 로 4.1 라벨 표준화를 실행하세요."
         )
     with open(SOURCE_CSV, "r", encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
@@ -200,6 +196,7 @@ def _call_mismatch(client, std_id: str, note: str, table: list[dict],
         except Exception as error:
             last_error = error
     print(f"  ⚠️ '{std_id}' 서술 검증 실패: {last_error}")
+    logger.warning("서술 정합성 LLM 호출 실패 — std_id=%s: %s", std_id, last_error)
     return {"verdict": "unverifiable", "reason": f"호출 실패: {last_error}"}
 
 
@@ -292,8 +289,12 @@ def main() -> None:
     except Exception:
         pass
 
+    setup_logging("flags")   # 구조화 로그(시작·집계·에러)를 run 로그·파일에 남긴다.
+
     rows = load_rows()
     print(f"\n의심값 자동 플래그: {len(rows)}행 검사 (점프≥{JUMP_PP}%p, 합계 100±{SUM_TOL})\n")
+    logger.info("flags 시작 — 검사 %d행 · 점프≥%s%%p · 합계 100±%s · 모델 %s",
+                len(rows), JUMP_PP, SUM_TOL, MODEL_NAME)
 
     print("4.3.1 전년 대비 급변...")
     compute_yoy(rows)
@@ -319,6 +320,8 @@ def main() -> None:
     print(f"  flag_sum_violation(합계)  : {n_sum}행")
     print(f"💾 {path}  (원본 {SOURCE_CSV.name} 은 보존)")
     print("=" * 60)
+    logger.info("flags 완료 — 표시행 %d개(jump %d · mismatch %d · sum %d) · %s",
+                flagged_rows, n_jump, n_mis, n_sum, path.name)
 
 
 if __name__ == "__main__":

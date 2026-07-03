@@ -1,4 +1,4 @@
-# rag/standardize.py
+# rag/transform/standardize.py
 # -----------------------------------------------------------------------------
 # 3단계: LLM 문항 표준화 + 연도 통합 데이터셋 만들기
 #
@@ -18,30 +18,26 @@
 # 보안: API Key 는 .env 의 OPENAI_API_KEY 에서만 읽는다.
 #
 # 실행 방법(2단계 추출이 끝난 뒤):
-#   uv run python rag/standardize.py
+#   uv run python -m rag.transform.standardize
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
 import csv
 import json
+import logging
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 # 같은 폴더/루트 어디서 실행해도 import 되도록
-try:
-    from rag.extract import get_client
-    from rag.config import STANDARDIZE_MODEL as MODEL_NAME
-except ImportError:
-    from extract import get_client
-    from config import STANDARDIZE_MODEL as MODEL_NAME
+from rag.ingest.extract import get_client
+from rag.core.config import STANDARDIZE_MODEL as MODEL_NAME
+from rag.core.logging_setup import setup_logging
+from rag.core.paths import OUTPUT_DIR
 
+logger = logging.getLogger("standardize")
 
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
 BATCH_SIZE = 40  # 한 번의 LLM 호출에 넘기는 문항 수
 
 
@@ -129,7 +125,7 @@ def load_records() -> list[dict]:
     if not files:
         raise RuntimeError(
             "outputs/ 에 추출 결과(*.extracted.jsonl)가 없습니다. "
-            "먼저 rag/extract.py 로 전체 추출을 실행하세요."
+            "먼저 rag/ingest/extract.py 로 전체 추출을 실행하세요."
         )
     records: list[dict] = []
     for path in files:
@@ -193,6 +189,7 @@ def _call_standardize(client, user_prompt: str, retries: int = 2) -> dict:
         except Exception as error:
             last_error = error
     print(f"  ⚠️ 표준화 배치 실패: {last_error}")
+    logger.warning("표준화 배치 LLM 호출 실패 — 이 배치 문항은 미매핑 처리: %s", last_error)
     return {"assignments": [], "new_entries": []}
 
 
@@ -334,9 +331,13 @@ def main() -> None:
     except Exception:
         pass
 
+    setup_logging("standardize")   # 구조화 로그(시작·집계·에러)를 run 로그·파일에 남긴다.
+
     records = load_records()
     instances = [Instance(id=i, record=r) for i, r in enumerate(records)]
     print(f"\n추출 레코드 {len(instances)}건을 표준화합니다 ({MODEL_NAME})...\n")
+    logger.info("standardize 시작 — 추출 레코드 %d건 · 모델 %s · 배치 %d",
+                len(instances), MODEL_NAME, BATCH_SIZE)
 
     client = get_client()
     dictionary, assignment = build_dictionary(client, instances)
@@ -345,6 +346,7 @@ def main() -> None:
     unmapped = [inst.id for inst in instances if inst.id not in assignment]
     if unmapped:
         print(f"\n⚠️ 표준 ID 미매핑 {len(unmapped)}건 (CSV 에는 std_id 빈칸으로 들어감)")
+        logger.warning("표준 ID 미매핑 %d건 — CSV std_id 빈칸으로 기록", len(unmapped))
 
     dict_path = save_dictionary(dictionary, instances, assignment)
     csv_path = save_long_csv(dictionary, instances, assignment)
@@ -361,6 +363,8 @@ def main() -> None:
     print(f"💾 문항 사전 : {dict_path}")
     print(f"💾 통합 CSV  : {csv_path}")
     print("=" * 60)
+    logger.info("standardize 완료 — 표준문항 %d개(2개년+ %d개) · 미매핑 %d건 · CSV %s",
+                len(dictionary), multi_year, len(unmapped), csv_path.name)
 
 
 if __name__ == "__main__":

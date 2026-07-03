@@ -1,4 +1,4 @@
-# rag/refill_vision.py
+# rag/curate/refill_vision.py
 # -----------------------------------------------------------------------------
 # 빵구(표 추출 실패) 블록을 '비전'으로 다시 읽어 데이터에 채워 넣는다.
 #
@@ -14,30 +14,28 @@
 #      (이후 dedup → flags → review 를 다시 돌리면 끝)
 #
 # 실행:
-#   uv run python rag/refill_vision.py                 # 빵구 블록 전부
-#   uv run python rag/refill_vision.py 친환경제품_확대희망품목   # 특정 std_id 만(검증용)
-#   uv run python rag/refill_vision.py --dry            # 바꾸지 않고 미리보기
+#   uv run python -m rag.curate.refill_vision                 # 빵구 블록 전부
+#   uv run python -m rag.curate.refill_vision 친환경제품_확대희망품목   # 특정 std_id 만(검증용)
+#   uv run python -m rag.curate.refill_vision --dry            # 바꾸지 않고 미리보기
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
 import csv
+import logging
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-try:
-    from rag.extract_vision import extract_pages_vision
-    from rag.extract import get_client
-except ImportError:
-    from extract_vision import extract_pages_vision
-    from extract import get_client
+from rag.ingest.extract_vision import extract_pages_vision
+from rag.ingest.extract import get_client
+from rag.core.paths import OUTPUT_DIR
+from rag.core.logging_setup import setup_logging
 
+# 지역 리스트 'log'(액션 로그)와 이름이 겹치지 않게 'logger'
+logger = logging.getLogger("refill_vision")
 
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
 RAW_CSV = OUTPUT_DIR / "standardized_long.csv"          # 3단계 산출(원본 라벨)
 CLEAN_CSV = OUTPUT_DIR / "standardized_long.clean.csv"  # 4.1 산출(+std_response_label)
 LOG_CSV = OUTPUT_DIR / "vision_refill_log.csv"
@@ -182,7 +180,8 @@ def reconcile_block(client, key, raw, clean, raw_cols, clean_cols, log, dry):
     for r in raw_rows:
         el = r.get("response_label")
         if el not in seen:
-            seen.add(el); existing_labels.append(el)
+            seen.add(el)
+            existing_labels.append(el)
 
     # 라벨별 결정: label -> (newv, action, old_value)
     decision: dict[str, tuple] = {}
@@ -192,9 +191,11 @@ def reconcile_block(client, key, raw, clean, raw_cols, clean_cols, log, dry):
             continue                                   # 빈 라벨 행은 매칭 대상 아님(아래서 처리)
         cur = next((num(r.get("value")) for r in raw_rows if r.get("response_label") == el), None)
 
-        hit = None; consumed = None
+        hit = None
+        consumed = None
         if nel in vmap:                                # 1) 정확 매칭
-            hit = vmap[nel]; consumed = nel
+            hit = vmap[nel]
+            consumed = nel
         else:                                          # 2) 퍼지/접두사 매칭
             best, bs = None, 0.0
             for lab, val, vnl in vitems:
@@ -206,7 +207,8 @@ def reconcile_block(client, key, raw, clean, raw_cols, clean_cols, log, dry):
                 if s >= bs:
                     bs, best = s, (lab, val, vnl)
             if best:
-                hit = (best[0], best[1]); consumed = best[2]
+                hit = (best[0], best[1])
+                consumed = best[2]
         if hit is None:
             continue
 
@@ -254,10 +256,14 @@ def reconcile_block(client, key, raw, clean, raw_cols, clean_cols, log, dry):
             continue
         newv = ("%g" % vval)
         if not dry:
-            nr = dict(raw_rows[0]); nr["response_label"] = lab; nr["value"] = newv
+            nr = dict(raw_rows[0])
+            nr["response_label"] = lab
+            nr["value"] = newv
             raw.append(nr)
             nc = dict(clean_rows[0] if clean_rows else raw_rows[0])
-            nc["response_label"] = lab; nc["std_response_label"] = lab; nc["value"] = newv
+            nc["response_label"] = lab
+            nc["std_response_label"] = lab
+            nc["value"] = newv
             for c in clean_cols:
                 nc.setdefault(c, "")
             clean.append(nc)
@@ -284,11 +290,19 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+    setup_logging("refill_vision")   # 구조화 로그가 run 로그(stderr 캡처)·자체 파일에 남게 한다.
 
     args = sys.argv[1:]
     dry = "--dry" in args
     args = [a for a in args if a != "--dry"]
     only_std = args[0] if args else None
+
+    # 테스트/검증 모드(RAG_FAKE_LLM): 비전 호출 없이 즉시 종료(무료·결정적, E2E 안전).
+    # canonical CSV·기존 후보 파일은 건드리지 않는다(추측을 지어내지 않는다).
+    if os.getenv("RAG_FAKE_LLM"):
+        print("RAG_FAKE_LLM — 비전 재판독 건너뜀(스텁). 후보 생성 안 함.")
+        logger.info("refill_vision fake 모드 — 건너뜀(비전 호출 0, 후보 0)")
+        return
 
     raw, raw_cols = load(RAW_CSV)
     clean, clean_cols = load(CLEAN_CSV)
@@ -296,6 +310,7 @@ def main() -> None:
     holes = find_hole_blocks(raw)
     if only_std:
         holes = [k for k in holes if k[1] == only_std]
+    logger.info("refill_vision 시작 — 빵구 블록 %d개%s", len(holes), " (dry)" if dry else "")
     print(f"빵구 블록 {len(holes)}개 비전 재추출 시작 {'(미리보기)' if dry else ''}\n")
 
     client = get_client()
@@ -308,7 +323,8 @@ def main() -> None:
         log_cols = ["year", "std_id", "action", "label", "old", "new", "detail"]
         with open(LOG_CSV, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.DictWriter(f, fieldnames=log_cols)
-            w.writeheader(); w.writerows(log)
+            w.writeheader()
+            w.writerows(log)
 
         if CANDIDATE_MODE:
             # canonical CSV 는 건드리지 않는다. 비전 결과를 '검토 후보'로만 내보낸다.
@@ -323,18 +339,19 @@ def main() -> None:
                 return m.group(1) if m else ""
 
             cand = [{
-                "year": l["year"], "std_id": l["std_id"],
-                "std_label": slabel.get((l["year"], l["std_id"]), ""),
-                "response_label": l["label"], "action": l["action"],
-                "old_value": l["old"], "vision_value": l["new"],
-                "source": ysrc.get(l["year"], ""), "page": _page(l["detail"]),
+                "year": a["year"], "std_id": a["std_id"],
+                "std_label": slabel.get((a["year"], a["std_id"]), ""),
+                "response_label": a["label"], "action": a["action"],
+                "old_value": a["old"], "vision_value": a["new"],
+                "source": ysrc.get(a["year"], ""), "page": _page(a["detail"]),
                 "method": "vision", "status": "candidate",
-            } for l in log if l["action"] in ("fill", "change", "inject", "discrepancy")]
+            } for a in log if a["action"] in ("fill", "change", "inject", "discrepancy")]
             ccols = ["year", "std_id", "std_label", "response_label", "action",
                      "old_value", "vision_value", "source", "page", "method", "status"]
             with open(CANDIDATES_CSV, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.DictWriter(f, fieldnames=ccols)
-                w.writeheader(); w.writerows(cand)
+                w.writeheader()
+                w.writerows(cand)
         else:
             # (비권장) 직접 반영 모드 — 아티팩트 제외하고 canonical 갱신
             raw = [r for r in raw if not r.get("_drop")]
@@ -344,7 +361,16 @@ def main() -> None:
 
     # 요약
     from collections import Counter
-    cnt = Counter(l["action"] for l in log)
+    cnt = Counter(a["action"] for a in log)
+    # 디버깅용 구조화 로그: 무엇을 시도/메움/남겼는지 한 줄로(run 로그 + 자체 로그에 남는다).
+    filled = cnt.get("fill", 0) + cnt.get("change", 0) + cnt.get("inject", 0)
+    logger.info(
+        "refill_vision 완료 — 빵구블록 %d · 메움(fill/change/inject) %d · "
+        "보류(구조불일치 %d, 검토대상 %d) · 비전실패 %d · 후보파일=%s",
+        len(holes), filled, cnt.get("structure_mismatch", 0),
+        cnt.get("discrepancy", 0), cnt.get("vision_empty", 0),
+        "미저장(dry)" if dry else CANDIDATES_CSV.name,
+    )
     print("\n" + "=" * 60)
     print(f"비전 재추출 반영: 빈칸 있는 블록 {len(holes)}개")
     print(f"  채움(fill)        : {cnt.get('fill',0)}  (빈칸을 비전값으로)")

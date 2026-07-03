@@ -39,7 +39,7 @@ def load_cases() -> list[dict]:
 
 def grade_one(case: dict) -> dict:
     """ 한 질문을 실제로 답하게 하고 3개 기준으로 채점한다. 실패 사유도 모아 돌려준다. """
-    from rag.answer import answer
+    from rag.retrieval.answer import answer
 
     res = answer(case["q"], k=5)
     text = res.text or ""

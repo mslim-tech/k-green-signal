@@ -1,0 +1,26 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "dotenv", "streamlit", "Streamlit", "pyproject", "addopts", "pytest", "testpaths",
+    "venv", "uv", "Popen", "chroma", "Chroma", "chromadb", "pypdf", "pymupdf", "tiktoken",
+    "rerank", "Reranker", "openai", "embeddings", "levelname", "langchain", "pyyaml",
+    "dedup", "DEDUP", "oldyears", "stdid", "STDID", "stdids", "qmap",
+    "selectbox", "pdfs", "runlog", "indexmod", "byyear", "cands", "inds", "summ",
+    "vmap", "nlab", "vitems", "vval", "newv", "ysrc", "slabel", "cand", "ccols",
+    "cpath", "fullkey", "mslim", "timespec",
+    "taskkill", "tasklist", "killpg", "getpgid", "logpath", "logf", "creationflags",
+    "PYTHONIOENCODING", "PYTHONUNBUFFERED", "PYTHONUTF",
+    "pycache", "mypy", "ipynb", "keiti", "signal",
+    "conds", "conftest", "crosstab", "CROSSTAB", "dataframe", "delenv", "docling", "Docling",
+    "fitz", "getpid", "hnsw", "idxs", "listwise", "logpanel", "metadatas", "metas",
+    "multiword", "NVALUE", "oldtable", "pageno", "PAGENUM", "pids", "pixmap", "prio",
+    "qvec", "returncode", "stcore", "stdlib", "tobytes", "totalrow", "unconf", "unrev",
+    "unreviewed", "YEARROW", "yvals", "ungated", "curation",
+    "andrej", "karpathy", "multica"
+  ],
+  "ignorePaths": [
+    ".venv/**", "outputs/**", "logs/**", "data/**", "test-results/**",
+    "uv.lock", "**/*.lock", "**/*.csv", "**/*.jsonl", "**/chroma/**"
+  ]
+}

@@ -1,4 +1,4 @@
-# rag/parsing.py
+# rag/ingest/parsing.py
 # -----------------------------------------------------------------------------
 # 1단계: 문항 블록 분리 (Question-Block Splitting)
 #
@@ -19,9 +19,9 @@
 #   각 블록에는 출처(source, page) 를 붙여 둔다. (다음 단계 LLM 추출의 입력이 됨)
 #
 # 실행 방법:
-#   uv run python rag/parsing.py                # data/ 전체를 블록으로 나눠 요약 출력
-#   uv run python rag/parsing.py 파일.pdf        # 특정 파일만
-#   uv run python rag/parsing.py 파일.pdf 5      # 샘플 블록 5개까지 자세히 출력
+#   uv run python -m rag.ingest.parsing                # data/ 전체를 블록으로 나눠 요약 출력
+#   uv run python -m rag.ingest.parsing 파일.pdf        # 특정 파일만
+#   uv run python -m rag.ingest.parsing 파일.pdf 5      # 샘플 블록 5개까지 자세히 출력
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations

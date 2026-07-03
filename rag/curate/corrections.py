@@ -1,4 +1,4 @@
-# rag/corrections.py
+# rag/curate/corrections.py
 # -----------------------------------------------------------------------------
 # 5단계 검수: 사람이 고친 내용(보정값)을 저장/불러오기/적용하기
 #
@@ -36,10 +36,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
+from rag.core.paths import OUTPUT_DIR
 CORRECTIONS_PATH = OUTPUT_DIR / "corrections.jsonl"
 
 # 한 행을 가리키는 식별 키를 이루는 컬럼들.
@@ -50,7 +47,11 @@ KEY_FIELDS = ("year", "std_id", "std_response_label")
 STATUS_FIXED = "fixed"          # 값을 고쳤다 -> 재정제 때 new_value 로 덮어쓴다
 STATUS_CONFIRMED = "confirmed"  # 원래 값이 맞다(검수 완료) -> 값은 그대로 둔다
 STATUS_SKIP = "skip"            # 판단 보류 -> 아무것도 하지 않는다
-VALID_STATUSES = (STATUS_FIXED, STATUS_CONFIRMED, STATUS_SKIP)
+# LLM 검증(adjudicate): LLM 이 원문(비전)과 독립 대조해 확정한 값. new_value 에 확정값을 담아
+# fixed 처럼 반영한다. 사람 확정과 '신뢰 등급'을 구분하려고 상태를 따로 둔다(reviewer 에도 태깅).
+# 사람이 이후 재검수하면 최신 레코드가 이겨 사람 판단이 우선한다(latest_by_key).
+STATUS_LLM_VERIFIED = "llm_verified"
+VALID_STATUSES = (STATUS_FIXED, STATUS_CONFIRMED, STATUS_SKIP, STATUS_LLM_VERIFIED)
 
 
 def row_key(row: dict) -> tuple:
@@ -161,27 +162,39 @@ _RESTORED_TABLE_META: dict[tuple, dict] = {
 
 def confirmed_only_rows(existing_rows: list[dict],
                         path: Path = CORRECTIONS_PATH) -> list[dict]:
-    """ 소스 데이터엔 없고 corrections 에만 사람이 확정(fixed/confirmed)으로 남긴
-        (year, std_id) 표를 인덱싱용 행으로 '복원'한다.
+    """ 기존 행에 '대응 행이 없는' 사람 확정값(fixed/confirmed)을 인덱싱용 행으로 '복원'한다.
 
-        왜 필요한가: 일부 표(예: 2023 표 3-60 '친환경제품 확대 희망')는 2단 표라
-        추출이 깨져 표준화/중복제거에서 통째로 드롭됐다. 사람이 PDF 를 대조해
-        corrections.jsonl 에 값을 확정했지만, apply_corrections 는 '기존 행만' 고치므로
-        대응 행이 없는 이 확정값은 인덱스에 들어가지 못한다 → 데이터 손실.
-        이 함수가 그 확정값을 행으로 만들어 chunking 이 인덱싱하게 한다.
+        두 경우를 함께 처리한다(둘 다 apply_corrections 로는 못 넣는 확정값):
+          (a) 표 통째 누락 — 예: 2023 표 3-60 '친환경제품 확대 희망'. 2단 표라 추출이
+              깨져 (year, std_id) 자체가 소스에서 사라졌다.
+          (b) 기존 표의 '새 응답라벨' — 예: 비전 재판독으로 확정한 p.39/p.42 항목.
+              같은 (year, std_id) 는 있지만 그 응답라벨 행은 없어(inject) 값이 못 들어간다.
+        판정 기준을 (year, std_id) 존재가 아니라 '전체 키(year, std_id, std_response_label)
+        존재'로 두어 (b) 도 복원한다. 이미 있는 행은 apply_corrections 가 담당하므로 건너뛴다.
 
         값 해석(apply_corrections 와 동일 의미):
           - fixed     → new_value (사람이 고쳐 넣은 값)
           - confirmed → old_value (사람이 '맞다'고 확인한 값)
           - skip / 빈값 → 제외(지어내지 않는다)
-        메타(source/page)는 같은 연도의 기존 행과 검수 메모(note)에서 가져온다.
+        메타(std_label/source/page/unit)는 같은 (year, std_id) 의 형제 행 → 같은 연도 →
+        검수 메모(note 의 p.NN) 순으로 가져온다. 지어내지 않는다.
     """
-    existing = {(r.get("year"), r.get("std_id")) for r in existing_rows}
+    # 이미 있는 전체 키 — 이 키에 걸리는 확정값은 apply_corrections 가 처리하므로 제외.
+    existing_full = {row_key(r) for r in existing_rows}
+    # (year, std_id) 형제 행(메타 상속용)과 연도별 대표 source.
+    sibling: dict[tuple, dict] = {}
     source_by_year: dict[str, str] = {}
+    # 같은 (year, std_id) 그룹이 실제로 몇 페이지에 걸쳐 있는지(형제 행들의 page_start 집합).
+    # 단일 페이지일 때만 그 페이지를 상속한다(여러 페이지면 새 라벨 위치가 불확실 → 지어내지 않음).
+    sibling_pages: dict[tuple, set] = {}
     for r in existing_rows:
         y = r.get("year")
+        sibling.setdefault((y, r.get("std_id")), r)
         if y and y not in source_by_year and (r.get("source") or "").strip():
             source_by_year[y] = r["source"]
+        ps = str(r.get("page_start") or "").strip()
+        if ps:
+            sibling_pages.setdefault((y, r.get("std_id")), set()).add(ps)
 
     # 페이지 번호는 검수 메모(note)에 적힌 'p.NN' 에서 가져온다. 최신 레코드 note 엔
     # 없고 과거 레코드(원문 대조 시점)에만 있을 수 있어 '전체 레코드'를 스캔한다.
@@ -194,46 +207,45 @@ def confirmed_only_rows(existing_rows: list[dict],
             if m:
                 page_by_key[key] = m.group(1)
 
-    # corrections 에만 있는 (year, std_id) 별로 최신 레코드를 모은다.
-    groups: dict[tuple, list[dict]] = {}
-    for rec in latest_by_key(all_records).values():
-        key = (rec.get("year"), rec.get("std_id"))
-        if key in existing:
-            continue
-        groups.setdefault(key, []).append(rec)
-
     rows: list[dict] = []
-    for (year, std_id), recs in groups.items():
-        page = page_by_key.get((year, std_id), "")
+    for rec in latest_by_key(all_records).values():
+        status = rec.get("status")
+        if status in (STATUS_FIXED, STATUS_LLM_VERIFIED):
+            value = (rec.get("new_value") or "").strip()
+        elif status == STATUS_CONFIRMED:
+            value = (rec.get("old_value") or "").strip()
+        else:
+            continue  # skip 은 인덱싱하지 않는다
+        if not value:
+            continue
+        if row_key(rec) in existing_full:
+            continue  # 대응 행이 이미 있음 → apply_corrections 가 값을 채운다
+
+        year, std_id, std_resp = row_key(rec)
+        sib = sibling.get((year, std_id), {})
         meta = _RESTORED_TABLE_META.get((year, std_id), {})
-        std_label = meta.get("std_label") or (std_id or "").replace("_", " ")
-        summary = meta.get("question_summary") or std_label
-        source = source_by_year.get(year, "")
-        for rec in recs:
-            status = rec.get("status")
-            if status == STATUS_FIXED:
-                value = (rec.get("new_value") or "").strip()
-            elif status == STATUS_CONFIRMED:
-                value = (rec.get("old_value") or "").strip()
-            else:
-                continue  # skip 은 인덱싱하지 않는다
-            if not value:
-                continue
-            rows.append({
-                "year": year,
-                "std_id": std_id,
-                "std_label": std_label,
-                # 비슷한 다른 표와 구분되도록 명시적 요약을 쓴다(없으면 라벨로 대체).
-                # '검수 복원'이라는 출처는 warning(메타)에만 남긴다.
-                "question_summary": summary,
-                "source": source,
-                "page_start": page,
-                "page_end": page,
-                "std_response_label": rec.get("std_response_label", ""),
-                "value": value,
-                "unit": "%",
-                "warning": "검수 복원(표 추출 누락 → 사람 확정값)",
-            })
+        std_label = meta.get("std_label") or sib.get("std_label") or (std_id or "").replace("_", " ")
+        summary = meta.get("question_summary") or sib.get("question_summary") or std_label
+        # 페이지: 검수 메모의 p.NN 이 최우선. 없으면 그룹이 '단일 페이지'일 때만 그 페이지를
+        # 상속하고, 여러 페이지에 걸쳐 있으면 빈칸으로 둔다(잘못된 출처 인용을 지어내지 않음).
+        grp_pages = sibling_pages.get((year, std_id), set())
+        inferred_page = next(iter(grp_pages)) if len(grp_pages) == 1 else ""
+        page = page_by_key.get((year, std_id)) or inferred_page
+        rows.append({
+            "year": year,
+            "std_id": std_id,
+            "std_label": std_label,
+            # 비슷한 다른 표와 구분되도록 명시적 요약을 쓴다(없으면 라벨로 대체).
+            # '검수 복원'이라는 출처는 warning(메타)에만 남긴다.
+            "question_summary": summary,
+            "source": sib.get("source") or source_by_year.get(year, ""),
+            "page_start": page,
+            "page_end": page,
+            "std_response_label": std_resp,
+            "value": value,
+            "unit": sib.get("unit") or "%",
+            "warning": "검수 복원(표 추출 누락 → 사람 확정값)",
+        })
     return rows
 
 
@@ -245,8 +257,9 @@ def apply_corrections(rows: list[dict], path: Path = CORRECTIONS_PATH) -> tuple[
     - 반환: (보정 적용된 새 rows, 실제로 값을 바꾼 건수)
     """
     latest = latest_by_key(load_corrections(path))
-    # 값을 실제로 바꾸는 보정(fixed)만 남긴다. 키는 (행 식별키 + field).
-    fixed = {k: rec for k, rec in latest.items() if rec.get("status") == STATUS_FIXED}
+    # 값을 실제로 바꾸는 보정(fixed·llm_verified)만 남긴다. 키는 (행 식별키 + field).
+    fixed = {k: rec for k, rec in latest.items()
+             if rec.get("status") in (STATUS_FIXED, STATUS_LLM_VERIFIED)}
     if not fixed:
         return [dict(r) for r in rows], 0
 

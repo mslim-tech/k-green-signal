@@ -1,4 +1,4 @@
-# rag/logging_setup.py
+# rag/core/logging_setup.py
 # -----------------------------------------------------------------------------
 # 전 모듈 공용 로깅 설정 (파일 + 콘솔, UTF-8)
 #
@@ -14,7 +14,7 @@
 #       나중에 추적·검증(테스트)할 수 있게 한다.
 #
 # 사용법:
-#   from rag.logging_setup import setup_logging
+#   from rag.core.logging_setup import setup_logging
 #   logfile = setup_logging("app")          # 앱/모듈 시작점에서 한 번
 #   import logging; log = logging.getLogger(__name__)
 #   log.info("작업 시작")

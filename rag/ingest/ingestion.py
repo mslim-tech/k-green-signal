@@ -1,4 +1,4 @@
-# rag/ingestion.py
+# rag/ingest/ingestion.py
 # -----------------------------------------------------------------------------
 # 0단계: 문서 진단 (Document Diagnosis)
 #
@@ -11,8 +11,8 @@
 # 아직 데이터를 추출/구조화하지 않는다. "이 PDF를 어떻게 다뤄야 하나"만 판단한다.
 #
 # 실행 방법:
-#   uv run python rag/ingestion.py            # data/ 폴더 전체 진단
-#   uv run python rag/ingestion.py 파일.pdf    # 특정 파일만 진단
+#   uv run python -m rag.ingest.ingestion            # data/ 폴더 전체 진단
+#   uv run python -m rag.ingest.ingestion 파일.pdf    # 특정 파일만 진단
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations

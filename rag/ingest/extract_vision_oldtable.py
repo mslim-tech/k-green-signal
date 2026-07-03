@@ -1,4 +1,4 @@
-# rag/extract_vision_oldtable.py
+# rag/ingest/extract_vision_oldtable.py
 # -----------------------------------------------------------------------------
 # 옛 형식(2018~2022 계열) 보고서의 '응답자 특성별 교차분석 표'에서
 # '전체(국민 전체)' 연도행을 비전으로 읽어 연도별 레코드로 만든다.
@@ -17,7 +17,7 @@
 # 보안: API Key 는 .env 의 OPENAI_API_KEY 에서만(get_client 재사용).
 #
 # 실행:
-#   uv run python rag/extract_vision_oldtable.py "<파일명.pdf>" [--save]
+#   uv run python -m rag.ingest.extract_vision_oldtable "<파일명.pdf>" [--save]
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -30,21 +30,10 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-try:
-    from rag.extract import get_client
-    from rag.config import VISION_MODEL
-    from rag.extract_vision import render_page_images, _resolve_pdf, extract_pages_vision
-except ImportError:
-    from extract import get_client
-    from config import VISION_MODEL
-    from extract_vision import render_page_images, _resolve_pdf, extract_pages_vision
-
-
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
-
+from rag.ingest.extract import get_client
+from rag.core.config import VISION_MODEL
+from rag.ingest.extract_vision import render_page_images, _resolve_pdf, extract_pages_vision
+from rag.core.paths import OUTPUT_DIR
 RE_TAB = re.compile(r"\[\s*표\s*\d+\s*[-–~]\s*\d+\s*\]\s*(.*)")   # [표 3-1] 제목
 RE_YEARROW = re.compile(r"\[\s*20\d{2}\s*년\s*\]")               # [2022년] 전체 연도행
 # 집계/머리글 라벨(응답 보기가 아님) — 비전이 섞어 넣으면 후처리로 제외
@@ -201,7 +190,11 @@ def to_records(result: dict, source: str, pageno: int, title: str) -> list[dict]
             "question_summary": summary, "response_items": items,
             "base_n": ye.get("base_n"), "unit": unit, "multi_response": multi,
             "prev_year_note": None, "figures": [],
-            "extraction_confidence": "high", "warning": None,
+            # 다년 크로스탭 비전 판독은 오류 위험이 큰 '점선'(검토 후보)이다.
+            # 스키마에 confidence 필드가 없어 자기평가를 못 받으므로 보수적으로 medium +
+            # warning 을 찍어 review 큐로 보낸다 → 사람이 확정하기 전까지 실선에 못 들어간다.
+            "extraction_confidence": "medium",
+            "warning": "다년 표 비전 판독 — 값 검증 필요",
         })
     return records
 
@@ -233,7 +226,7 @@ def run(source: str, save: bool = False) -> list[dict]:
 # --- 2014~2017 계열: 연도행이 없고 '응답자 특성별 교차분석'의 '전체' 행만 있는 형식 ---
 # 각 문항: 차트 페이지(제목+서술) → 교차분석 표(전체/성별/연령). 표의 '전체' 행이 그 해
 # 전체값. 차트+표를 함께 비전에 줘 제목과 완전한 전체 분포를 읽는다(연도는 파일명).
-import re as _re
+import re as _re  # noqa: E402  (연도별 섹션 구분을 위한 의도적 지역 import)
 
 RE_CROSSTAB = _re.compile(r"응답자\s*특성[에별].*교차분석")
 
@@ -315,7 +308,7 @@ def main() -> None:
     totalrow = "--totalrow" in args        # 2014~2017 형식(전체 행)
     args = [a for a in args if a not in ("--save", "--totalrow")]
     if not args:
-        print('사용법: uv run python rag/extract_vision_oldtable.py "<파일명.pdf>" [--save] [--totalrow]')
+        print('사용법: uv run python -m rag.ingest.extract_vision_oldtable "<파일명.pdf>" [--save] [--totalrow]')
         return
     (run_totalrow if totalrow else run)(args[0], save=save)
 

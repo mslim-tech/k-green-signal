@@ -1,4 +1,4 @@
-# rag/extract.py
+# rag/ingest/extract.py
 # -----------------------------------------------------------------------------
 # 2단계: LLM 구조화 추출 (LLM Structured Extraction)
 #
@@ -16,34 +16,37 @@
 # 보안: API Key 는 .env 의 OPENAI_API_KEY 에서만 읽는다.
 #
 # 실행 방법:
-#   uv run python rag/extract.py                 # 2025 보고서에서 3개 블록만 시험 추출
-#   uv run python rag/extract.py 파일.pdf 5       # 특정 파일에서 5개 블록 시험 추출
-#   uv run python rag/extract.py 파일.pdf 999 --save   # 전체 추출 후 outputs/ 에 저장
+#   uv run python -m rag.ingest.extract                 # 2025 보고서에서 3개 블록만 시험 추출
+#   uv run python -m rag.ingest.extract 파일.pdf 5       # 특정 파일에서 5개 블록 시험 추출
+#   uv run python -m rag.ingest.extract 파일.pdf 999 --save   # 전체 추출 후 outputs/ 에 저장
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sys
-from dataclasses import dataclass, field, asdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
 # 같은 폴더에서 실행하든 프로젝트 루트에서 실행하든 import 가 되도록 한다.
-try:
-    from rag.parsing import parse_pdf, QuestionBlock
-    from rag.config import EXTRACT_MODEL
-except ImportError:
-    from parsing import parse_pdf, QuestionBlock
-    from config import EXTRACT_MODEL
+from rag.ingest.parsing import parse_pdf, QuestionBlock
+from rag.core.config import EXTRACT_MODEL, LLM_MAX_WORKERS
+from rag.core.logging_setup import setup_logging
+logger = logging.getLogger("extract")
 
 
 # 사용할 모델은 중앙 설정(config.py)에서 가져온다. (현재 gpt-5.4-mini)
 MODEL_NAME = EXTRACT_MODEL
+
+# 블록별 LLM 추출을 병렬로(refine 과 동일한 방식). 워커 수는 config 중앙관리(429 회피).
+MAX_WORKERS = LLM_MAX_WORKERS
 
 
 # -----------------------------------------------------------------------------
@@ -263,10 +266,7 @@ def format_record(rec: ExtractedRecord) -> str:
 
 def save_jsonl(records: list[ExtractedRecord], source_name: str) -> Path:
     """ 추출 결과를 outputs/ 에 JSONL 로 저장한다. (결과 파일이 필요해진 시점에 폴더 생성) """
-    try:
-        from rag.paths import OUTPUT_DIR as out_dir
-    except ImportError:
-        from paths import OUTPUT_DIR as out_dir
+    from rag.core.paths import OUTPUT_DIR as out_dir
     out_dir.mkdir(exist_ok=True)
     stem = Path(source_name).stem
     out_path = out_dir / f"{stem}.extracted.jsonl"
@@ -286,42 +286,64 @@ def main() -> None:
     do_save = "--save" in args
     args = [a for a in args if a != "--save"]
 
-    # 기본값: 2025 보고서에서 3개 블록만 시험 추출 (비용/시간 절약)
-    target = next((a for a in args if not a.isdigit()), None)
+    # 파일 인자(비숫자)는 '여러 개' 올 수 있다 = 그 PDF 전부 추출. 개수(숫자)는 블록 상한.
+    targets = [a for a in args if not a.isdigit()]
     count = next((int(a) for a in args if a.isdigit()), 3)
 
-    if target is None:
-        default = Path("data/2025년 친환경생활·소비 국민 인지도 조사 결과보고서.pdf")
-        target = str(default)
+    if not targets:
+        # 기본값: 2025 보고서에서 3개 블록만 시험 추출 (비용/시간 절약)
+        targets = ["data/2025년 친환경생활·소비 국민 인지도 조사 결과보고서.pdf"]
+
+    setup_logging("extract")   # 구조화 로그(시작·집계·에러)를 run 로그·파일에 남긴다.
 
     try:
         client = get_client()
     except RuntimeError as error:
         print(f"❌ {error}")
+        logger.error("extract 중단 — OpenAI 클라이언트 생성 실패: %s", error)
         return
 
-    blocks = parse_pdf(target)
-    selected = blocks[:count]
-    print(f"\n📄 {Path(target).name}")
-    print(f"   전체 {len(blocks)}개 블록 중 {len(selected)}개를 {MODEL_NAME} 로 추출합니다...\n")
+    # 선택된 PDF 를 순서대로 추출·저장한다(각 PDF → 별도 *.extracted.jsonl).
+    for t_i, target in enumerate(targets, start=1):
+        blocks = parse_pdf(target)
+        selected = blocks[:count]
+        print(f"\n📄 [{t_i}/{len(targets)}] {Path(target).name}")
+        print(f"   전체 {len(blocks)}개 블록 중 {len(selected)}개를 {MODEL_NAME} 로 추출합니다...\n")
+        logger.info("extract 시작 — %s · 전체 %d블록 중 %d블록 · 모델 %s · save=%s",
+                    Path(target).name, len(blocks), len(selected), MODEL_NAME, do_save)
 
-    records: list[ExtractedRecord] = []
-    for i, block in enumerate(selected, start=1):
-        rec = extract_block(client, block)
-        records.append(rec)
-        print(f"[{i}/{len(selected)}]")
-        print(format_record(rec))
-        print()
+        # 블록을 병렬로 추출한다(순서는 idx 로 보존 — 저장 jsonl 은 원래 블록 순서).
+        slots: list[ExtractedRecord | None] = [None] * len(selected)
+        done_n = 0
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            fut_to_idx = {ex.submit(extract_block, client, b): idx
+                          for idx, b in enumerate(selected)}
+            for fut in as_completed(fut_to_idx):
+                idx = fut_to_idx[fut]
+                rec = fut.result()
+                slots[idx] = rec
+                done_n += 1
+                print(f"[{done_n}/{len(selected)}]")   # 완료 카운터(진행바 파싱용)
+                print(format_record(rec))
+                print()
+        records: list[ExtractedRecord] = [r for r in slots if r is not None]
 
-    # 신뢰도 요약 (사람 검수가 필요한 블록 파악용)
-    conf = {"high": 0, "medium": 0, "low": 0}
-    for rec in records:
-        conf[rec.extraction_confidence] = conf.get(rec.extraction_confidence, 0) + 1
-    print(f"신뢰도: high={conf['high']} / medium={conf['medium']} / low={conf['low']}")
+        # 신뢰도 요약 (사람 검수가 필요한 블록 파악용)
+        conf = {"high": 0, "medium": 0, "low": 0}
+        for rec in records:
+            conf[rec.extraction_confidence] = conf.get(rec.extraction_confidence, 0) + 1
+        print(f"신뢰도: high={conf['high']} / medium={conf['medium']} / low={conf['low']}")
 
-    if do_save:
-        out_path = save_jsonl(records, Path(target).name)
-        print(f"💾 저장: {out_path}")
+        if do_save:
+            out_path = save_jsonl(records, Path(target).name)
+            print(f"💾 저장: {out_path}")
+            logger.info("extract 완료 — %s · %d레코드(high %d / medium %d / low %d) 저장 %s",
+                        Path(target).name, len(records),
+                        conf["high"], conf["medium"], conf["low"], out_path.name)
+        else:
+            logger.info("extract 완료(미저장) — %s · %d레코드(high %d / medium %d / low %d)",
+                        Path(target).name, len(records),
+                        conf["high"], conf["medium"], conf["low"])
 
 
 if __name__ == "__main__":

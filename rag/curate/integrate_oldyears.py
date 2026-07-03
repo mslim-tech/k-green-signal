@@ -1,4 +1,4 @@
-# rag/integrate_oldyears.py
+# rag/curate/integrate_oldyears.py
 # -----------------------------------------------------------------------------
 # 옛 연도(비전 추출) 데이터를 기존 큐레이션 데이터셋에 '증분' 통합한다.
 #
@@ -14,8 +14,8 @@
 #   2) apply: 매핑으로 2022 행을 만들어 clean.csv·dedup.csv 에 '추가'한다(라이브 반영).
 #
 # 실행:
-#   uv run python rag/integrate_oldyears.py            # map (checkpoint)
-#   uv run python rag/integrate_oldyears.py --apply    # clean/dedup 에 추가
+#   uv run python -m rag.curate.integrate_oldyears            # map (checkpoint)
+#   uv run python -m rag.curate.integrate_oldyears --apply    # clean/dedup 에 추가
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -25,26 +25,17 @@ import json
 import sys
 from pathlib import Path
 
-try:
-    from rag.extract import get_client
-    from rag.standardize import (_batch_prompt, _call_standardize, Instance,
-                                 BATCH_SIZE, LONG_CSV_COLUMNS)
-except ImportError:
-    from extract import get_client
-    from standardize import (_batch_prompt, _call_standardize, Instance,
-                            BATCH_SIZE, LONG_CSV_COLUMNS)
-
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
+from rag.ingest.extract import get_client
+from rag.transform.standardize import (_batch_prompt, _call_standardize, Instance,
+                             BATCH_SIZE, LONG_CSV_COLUMNS)
+from rag.core.paths import OUTPUT_DIR
 STAGING = OUTPUT_DIR / "_staging_oldyears"
 CLEAN = OUTPUT_DIR / "standardized_long.clean.csv"
 DEDUP = OUTPUT_DIR / "standardized_long.dedup.csv"
 MAP_FILE = STAGING / "std_mapping.json"     # 결정적 매핑(저장/재사용)
-# 사람이 채운 과병합 교정 워크시트(저장소 루트). proposed_std_id 가 채워진 행만
+# 사람이 채운 과병합 교정 워크시트(curation/). proposed_std_id 가 채워진 행만
 # (year, current_std_id, subsection 접두사) 로 std_id 를 결정적으로 교정한다.
-WORKSHEET = Path(__file__).resolve().parent.parent / "mapping_review.csv"
+WORKSHEET = Path(__file__).resolve().parent.parent / "curation" / "mapping_review.csv"
 CLEAN_COLUMNS = LONG_CSV_COLUMNS[:5] + ["std_response_label"] + LONG_CSV_COLUMNS[5:]
 
 # 매핑 정제: LLM 이 '다른 문항'을 같은 std_id 로 과병합하는 것을 문항(subsection)

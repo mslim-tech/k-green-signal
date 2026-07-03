@@ -1,4 +1,4 @@
-# rag/dedup.py
+# rag/transform/dedup.py
 # -----------------------------------------------------------------------------
 # 4단계 4.2: 중복 제거 / 잘못 합쳐진 항목 분리
 #
@@ -26,7 +26,7 @@
 #     outputs/dedup_log.csv                 - 무엇을 분리/제거했는지 내역
 #
 # 실행 방법(4.1 라벨 표준화가 끝난 뒤):
-#   uv run python rag/dedup.py
+#   uv run python -m rag.transform.dedup
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -34,13 +34,9 @@ from __future__ import annotations
 import csv
 import sys
 from collections import defaultdict
-from pathlib import Path
 
 
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
+from rag.core.paths import OUTPUT_DIR
 SOURCE_CSV = OUTPUT_DIR / "standardized_long.clean.csv"     # 4.1 산출 (입력, 보존)
 DEDUP_CSV = OUTPUT_DIR / "standardized_long.dedup.csv"      # 4.2 산출
 LOG_CSV = OUTPUT_DIR / "dedup_log.csv"
@@ -85,7 +81,7 @@ def block_key(r: dict) -> tuple:
 def load_rows() -> list[dict]:
     if not SOURCE_CSV.exists():
         raise RuntimeError(
-            f"{SOURCE_CSV} 가 없습니다. 먼저 rag/refine.py 로 4.1 라벨 표준화를 실행하세요."
+            f"{SOURCE_CSV} 가 없습니다. 먼저 rag/transform/refine.py 로 4.1 라벨 표준화를 실행하세요."
         )
     with open(SOURCE_CSV, "r", encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
@@ -153,8 +149,15 @@ def main() -> None:
         nonempty = [num(rows[i].get("value")) for i in idxs]
         nonempty = [v for v in nonempty if v is not None]
 
-        if len(set(nonempty)) <= 1:
-            # C. 진짜 중복 → 값 있는 행 하나만 남기고 제거
+        # 같은 std_response_label 이라도 '원본 응답 라벨(response_label)'이 서로 다르면
+        # refine 이 과잉병합한 서로 '다른 항목'이다. 값이 우연히 같아도 진짜 중복이 아니므로
+        # C(드롭)로 보내면 distinct 항목이 사라진다 → 이 경우는 B(un-merge)로 원래 라벨 복원.
+        orig_labels = {(rows[i].get("response_label") or "").strip() for i in idxs}
+        orig_labels.discard("")
+        same_item = len(orig_labels) <= 1
+
+        if same_item and len(set(nonempty)) <= 1:
+            # C. 진짜 중복(같은 원본 라벨 + 값 동일) → 값 있는 행 하나만 남기고 제거
             keeper = next((i for i in idxs if num(rows[i].get("value")) is not None), idxs[0])
             for i in idxs:
                 if i != keeper:

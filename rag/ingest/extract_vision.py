@@ -1,4 +1,4 @@
-# rag/extract_vision.py
+# rag/ingest/extract_vision.py
 # -----------------------------------------------------------------------------
 # 2단계(비전): 표가 깨진 블록을 'PDF 페이지 이미지'로 다시 읽는다.
 #
@@ -14,7 +14,7 @@
 # 보안: API Key 는 .env 의 OPENAI_API_KEY 에서만 읽는다(get_client 재사용).
 #
 # 단독 시험:
-#   uv run python rag/extract_vision.py "2023년 인지도조사 결과보고서.pdf" 74 75
+#   uv run python -m rag.ingest.extract_vision "2023년 인지도조사 결과보고서.pdf" 74 75
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -26,14 +26,8 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-try:
-    from rag.extract import get_client, EXTRACTION_SCHEMA
-    from rag.config import VISION_MODEL
-except ImportError:
-    from extract import get_client, EXTRACTION_SCHEMA
-    from config import VISION_MODEL
-
-
+from rag.ingest.extract import get_client, EXTRACTION_SCHEMA
+from rag.core.config import VISION_MODEL
 DATA_DIR = Path("data")
 RENDER_DPI = 200   # 숫자가 또렷하게 읽히는 해상도(너무 키우면 토큰/속도 부담)
 
@@ -141,7 +135,7 @@ def main() -> None:
 
     args = sys.argv[1:]
     if len(args) < 3:
-        print('사용법: uv run python rag/extract_vision.py "<파일명.pdf>" <page_start> <page_end>')
+        print('사용법: uv run python -m rag.ingest.extract_vision "<파일명.pdf>" <page_start> <page_end>')
         return
     source, ps, pe = args[0], int(args[1]), int(args[2])
 

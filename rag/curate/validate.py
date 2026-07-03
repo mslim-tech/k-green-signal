@@ -1,4 +1,4 @@
-# rag/validate.py
+# rag/curate/validate.py
 # -----------------------------------------------------------------------------
 # 데이터 준비 게이트 (Readiness Gate)
 #
@@ -13,11 +13,12 @@
 #     2) blank_values       : 라벨은 있는데 값이 빈 행 (corrections 적용 후에도)
 #     3) unconfirmed_vision : 비전 후보(vision_candidates) 중 사람이 미확정
 #     4) unreviewed_high    : 검수 큐의 high 우선순위 중 미검수
+#     5) ungated_uncertain  : 검수 큐를 거치지 않은 불확실 행(비전 등 side-channel 직접 기입)
 #   경고(warn, 비차단):
 #     - unreviewed_medium, rows_with_warning
 #
 # 실행(현재 데이터 상태 점검):
-#   uv run python rag/validate.py
+#   uv run python -m rag.curate.validate
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -28,20 +29,13 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-try:
-    from rag import chunking, corrections
-    from rag.logging_setup import setup_logging
-except ImportError:
-    import chunking
-    import corrections
-    from logging_setup import setup_logging
+from rag.retrieval import chunking
+from rag.curate import corrections
+from rag.core.logging_setup import setup_logging
+from rag.core.paths import OUTPUT_DIR
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
 REVIEW_QUEUE = OUTPUT_DIR / "review_queue.csv"
 VISION_CANDIDATES = OUTPUT_DIR / "vision_candidates.csv"
 
@@ -81,6 +75,20 @@ def _load_csv(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
+def is_uncertain_high(row: dict, reviewed: set) -> bool:
+    """ 인덱싱을 막는 '불확실 high' 판정 — 게이트·사이드바·집중필터·adjudicate 의 단일 소스.
+        미검수 high 중 저신뢰·빈칸/비숫자·합계이상만 True. 고신뢰·숫자·합계정상은
+        분석 플래그(급변/노트모순)만 있는 충실 추출이므로 인덱싱 허용(=False). """
+    if row.get("review_priority") != "high":
+        return False
+    if corrections.row_key(row) in reviewed:
+        return False
+    conf = (row.get("extraction_confidence") or "").strip().lower()
+    is_num = _num(row.get("value")) is not None
+    sum_bad = row.get("flag_sum_violation") == "True"
+    return not (conf == "high" and is_num and not sum_bad)
+
+
 def validate_ready(strict: bool = True) -> ReadinessReport:
     """ 인덱싱 준비 상태를 검사해 ReadinessReport 를 돌려준다. """
     checks: list[Check] = []
@@ -92,8 +100,8 @@ def validate_ready(strict: bool = True) -> ReadinessReport:
     # 1) 빈 청크
     empty = [c for c in chunks if c["metadata"].get("n_responses", 0) == 0]
     checks.append(Check(
-        id="empty_chunks", label="값이 하나도 없는 문항(빈 청크)",
-        severity="block", ok=(len(empty) == 0), count=len(empty),
+        id="empty_chunks", label="값이 하나도 없는 문항(빈 청크 — 색인 제외)",
+        severity="warn", ok=(len(empty) == 0), count=len(empty),
         items=[f"{c['metadata']['year']} {c['metadata']['std_id']} — {c['metadata'].get('source','')} p.{c['metadata'].get('page','')}" for c in empty[:MAX_ITEMS]],
         fix_hint="추출/검수 단계에서 값을 채우거나(비전 후보 확정), 해당 문항을 제외하세요.",
     ))
@@ -105,10 +113,10 @@ def validate_ready(strict: bool = True) -> ReadinessReport:
         if label and _num(r.get("value")) is None:
             blanks.append(f"{r.get('year')} {r.get('std_id')} · {label}")
     checks.append(Check(
-        id="blank_values", label="라벨은 있는데 값이 빈 행",
-        severity="block", ok=(len(blanks) == 0), count=len(blanks),
+        id="blank_values", label="라벨은 있는데 값이 빈 행(값 없음 — 색인 제외)",
+        severity="warn", ok=(len(blanks) == 0), count=len(blanks),
         items=blanks[:MAX_ITEMS],
-        fix_hint="검수 단계에서 원문을 보고 값을 확정(corrections)하거나 행을 정리하세요.",
+        fix_hint="값이 없어 색인에서 자동 제외됩니다. 채우려면 검수/비전으로 확정하세요(선택).",
     ))
 
     # 3) 미확정 비전 후보
@@ -123,30 +131,67 @@ def validate_ready(strict: bool = True) -> ReadinessReport:
         if key not in confirmed:
             unconf.append(f"{key[0]} {key[1]} · {key[2]} (비전 {r.get('vision_value')})")
     checks.append(Check(
-        id="unconfirmed_vision", label="사람이 확정 안 한 비전 후보",
-        severity="block", ok=(len(unconf) == 0), count=len(unconf),
+        id="unconfirmed_vision", label="사람이 확정 안 한 비전 후보(제안일 뿐 — 색인 안 됨)",
+        severity="warn", ok=(len(unconf) == 0), count=len(unconf),
         items=unconf[:MAX_ITEMS],
-        fix_hint="검수 단계에서 비전 후보의 출처를 보고 값을 확정하세요.",
+        fix_hint="비전 후보는 확정 전까지 색인되지 않습니다. 확정하면 데이터로 반영(선택).",
     ))
 
-    # 4) 미검수 high 우선순위
+    # 4) 미검수 high 우선순위 — 게이트 완화(하이브리드)
+    #    high-confidence·숫자·합계정상 행은 '분석 플래그(급변/노트모순)'만 붙은 충실 추출이므로
+    #    인덱싱을 막지 않는다(플래그는 경고로 보존). 진짜 불확실(빈칸·저신뢰·합계이상)만 차단해
+    #    LLM 검증(Stage 2)·사람 검수로 보낸다.
     reviewed = corrections.reviewed_keys()
     queue = _load_csv(REVIEW_QUEUE)
-    unrev_high, unrev_med = [], []
+    unrev_high, relaxed_high, unrev_med = [], [], []
     for r in queue:
         if corrections.row_key(r) in reviewed:
             continue
         prio = (r.get("review_priority") or "").strip()
         tag = f"{r.get('year')} {r.get('std_id')} · {r.get('std_response_label')}"
         if prio == "high":
-            unrev_high.append(tag)
+            if is_uncertain_high(r, reviewed):
+                unrev_high.append(tag)     # 빈칸·저신뢰·합계이상 → 차단
+            else:
+                relaxed_high.append(tag)   # 충실 추출 + 분석 플래그만 → 인덱싱 허용
         elif prio == "medium":
             unrev_med.append(tag)
     checks.append(Check(
-        id="unreviewed_high", label="검수 안 끝난 high 우선순위 행",
+        id="unreviewed_high", label="검수 안 끝난 high 행(불확실 — 빈칸·저신뢰·합계이상)",
         severity="block", ok=(len(unrev_high) == 0), count=len(unrev_high),
         items=unrev_high[:MAX_ITEMS],
-        fix_hint="검수 단계에서 high 항목을 확인/수정해 마무리하세요.",
+        fix_hint="빈칸·저신뢰·합계이상 행입니다. LLM 검증 또는 검수로 확정하세요.",
+    ))
+    # 완화로 인덱싱 허용된 high(분석 플래그만) — 경고(비차단)로 가시화한다.
+    checks.append(Check(
+        id="flagged_high_indexed", label="분석 플래그만 있는 high(충실 추출 — 인덱싱 허용)",
+        severity="warn", ok=(len(relaxed_high) == 0), count=len(relaxed_high),
+        items=relaxed_high[:MAX_ITEMS],
+        fix_hint="급변/노트모순 등 분석 경고만 있는 고신뢰 추출입니다. 인덱싱되며, 필요 시 검토하세요.",
+    ))
+
+    # 5) 검수 큐를 '거치지 않은' 불확실 인덱싱 행 (integrate_oldyears 등 side-channel 로
+    #    clean/dedup.csv 에 직접 기입돼 flags→review 를 건너뛴 비전/저신뢰 값).
+    #    "추측은 데이터가 아니다" → 값이 있어도 사람 확정 전이면 인덱싱 차단.
+    #    (정상 흐름의 저신뢰 행은 review_queue 에 등재돼 검사 4/큐가 담당하므로 여기서 제외.)
+    queued_keys = {corrections.row_key(r) for r in queue}
+    ungated = []
+    for r in rows:
+        if _num(r.get("value")) is None:
+            continue  # 값이 빈 행은 blank_values(검사 2)가 담당
+        conf = (r.get("extraction_confidence") or "").strip().lower()
+        warn = (r.get("warning") or "").strip()
+        if not warn and conf not in ("low", "medium"):
+            continue  # 고신뢰·무경고 → 확정 사실로 취급
+        key = corrections.row_key(r)
+        if key in reviewed or key in confirmed or key in queued_keys:
+            continue  # 사람이 검수/확정했거나 정상적으로 검수 큐에 등재됨
+        ungated.append(f"{r.get('year')} {r.get('std_id')} · {r.get('std_response_label')} ({warn or conf})")
+    checks.append(Check(
+        id="ungated_uncertain", label="검수 큐를 거치지 않은 불확실 행(비전 등 side-channel)",
+        severity="block", ok=(len(ungated) == 0), count=len(ungated),
+        items=ungated[:MAX_ITEMS],
+        fix_hint="integrate 등으로 직접 기입된 저신뢰/비전 값입니다. flags→review→검수(confirm)로 확정하세요.",
     ))
 
     # 경고(비차단): 미검수 medium
@@ -165,7 +210,7 @@ def validate_ready(strict: bool = True) -> ReadinessReport:
         if ok else
         f"인덱싱 차단 — {len(blocking)}종 / 총 {n_block}건 처리 필요"
     )
-    log.info("validate_ready: ok=%s, blocking=%s", ok, [c.id for c in blocking])
+    logger.info("validate_ready: ok=%s, blocking=%s", ok, [c.id for c in blocking])
     return ReadinessReport(ok=ok, checks=checks, blocking=blocking, summary=summary)
 
 

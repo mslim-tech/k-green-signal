@@ -1,4 +1,4 @@
-# rag/refine.py
+# rag/transform/refine.py
 # -----------------------------------------------------------------------------
 # 4단계 4.1: 응답 라벨 표준화
 #
@@ -22,30 +22,33 @@
 # 보안: API Key 는 .env 의 OPENAI_API_KEY 에서만 읽는다.
 #
 # 실행 방법(3단계 표준화가 끝난 뒤):
-#   uv run python rag/refine.py
+#   uv run python -m rag.transform.refine
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
 import csv
 import json
+import logging
 import sys
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 # 같은 폴더/루트 어디서 실행해도 import 되도록
-try:
-    from rag.extract import get_client
-    from rag.config import STANDARDIZE_MODEL as MODEL_NAME
-except ImportError:
-    from extract import get_client
-    from config import STANDARDIZE_MODEL as MODEL_NAME
+from rag.ingest.extract import get_client
+from rag.core.config import STANDARDIZE_MODEL as MODEL_NAME
+from rag.core.config import LLM_MAX_WORKERS
+from rag.core.logging_setup import setup_logging
+from rag.core.paths import OUTPUT_DIR
 
+logger = logging.getLogger("refine")
 
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
+# 문항별 LLM 호출은 서로 독립적이고 I/O(네트워크) 대기라, 스레드로 병렬 호출해 시간을 줄인다.
+# (OpenAI 클라이언트는 httpx 연결풀 기반이라 스레드 간 공유가 안전하다.)
+# 워커 수는 config 중앙관리(429 rate limit 회피 — extract 와 공유).
+MAX_WORKERS = LLM_MAX_WORKERS
+
 SOURCE_CSV = OUTPUT_DIR / "standardized_long.csv"        # 3단계 산출 (입력, 보존)
 MAP_PATH = OUTPUT_DIR / "response_label_map.json"        # 4.1.3 산출
 CLEAN_CSV = OUTPUT_DIR / "standardized_long.clean.csv"   # 4.1.4 산출
@@ -109,7 +112,7 @@ def load_rows() -> list[dict]:
     """ 3단계 산출 CSV 를 읽어 행 목록으로 돌려준다. """
     if not SOURCE_CSV.exists():
         raise RuntimeError(
-            f"{SOURCE_CSV} 가 없습니다. 먼저 rag/standardize.py 로 표준화를 실행하세요."
+            f"{SOURCE_CSV} 가 없습니다. 먼저 rag/transform/standardize.py 로 표준화를 실행하세요."
         )
     # utf-8-sig: standardize.py 가 BOM 포함으로 저장하므로 그대로 읽는다.
     with open(SOURCE_CSV, "r", encoding="utf-8-sig", newline="") as f:
@@ -165,43 +168,59 @@ def _call_group_labels(client, std_id: str, labels: list[str], retries: int = 2)
             return json.loads(response.choices[0].message.content)
         except Exception as error:
             last_error = error
+    logger.warning("'%s' 라벨 묶기 실패: %s", std_id, last_error)
     print(f"  ⚠️ '{std_id}' 라벨 묶기 실패: {last_error}")
     return {"groups": []}
 
 
+def _mapping_for(client, sid: str, labels: list[str]) -> dict[str, str]:
+    """ 한 문항의 라벨 묶기 결과를 {원본라벨: 대표라벨} 로 만든다(누락 라벨은 항등). """
+    result = _call_group_labels(client, sid, labels)
+    mapping: dict[str, str] = {}
+    for group in result.get("groups", []):
+        canonical = (group.get("canonical") or "").strip()
+        if not canonical:
+            continue
+        for m in group.get("members") or []:
+            m = (m or "").strip()
+            if m:
+                mapping[m] = canonical
+    # 안전망: LLM 이 누락한 원본 라벨은 자기 자신을 대표로(항등 매핑) → 데이터 손실 방지.
+    for lab in labels:
+        mapping.setdefault(lab, lab)
+    return mapping
+
+
 def build_label_map(client, by_q: "OrderedDict[str, list[str]]") -> dict[str, dict[str, str]]:
     """
-    문항별로 {원본라벨: 대표라벨} 사전을 만든다.
+    문항별로 {원본라벨: 대표라벨} 사전을 만든다. 라벨 2개 이상인 문항만 LLM 을 호출하며,
+    문항 간 호출은 서로 독립이라 스레드풀로 '병렬' 처리한다(순차 대비 대기시간 단축).
     LLM 이 빠뜨리거나 모르는 라벨은 '자기 자신'을 대표로 두어(항등) 데이터 손실을 막는다.
     """
     label_map: dict[str, dict[str, str]] = {}
-    total = len(by_q)
-    for i, (sid, labels) in enumerate(by_q.items(), start=1):
+    todo: dict[str, list[str]] = {}
+    for sid, labels in by_q.items():
         # 라벨이 1개뿐이면 묶을 게 없으니 LLM 호출을 아낀다.
         if len(labels) <= 1:
             label_map[sid] = {lab: lab for lab in labels}
-            print(f"  [{i}/{total}] {sid}: 라벨 {len(labels)}개 (호출 생략)")
-            continue
+        else:
+            todo[sid] = labels
 
-        result = _call_group_labels(client, sid, labels)
-        mapping: dict[str, str] = {}
-        for group in result.get("groups", []):
-            canonical = (group.get("canonical") or "").strip()
-            members = group.get("members") or []
-            if not canonical:
-                continue
-            for m in members:
-                m = (m or "").strip()
-                if m:
-                    mapping[m] = canonical
+    logger.info("라벨 표준화 시작 — 문항 %d개 중 LLM 호출 %d개(병렬 %d), 호출 생략 %d개",
+                len(by_q), len(todo), MAX_WORKERS, len(by_q) - len(todo))
 
-        # 안전망: LLM 이 누락한 원본 라벨은 자기 자신을 대표로(항등 매핑).
-        for lab in labels:
-            mapping.setdefault(lab, lab)
-
-        label_map[sid] = mapping
-        groups_n = len({v for v in mapping.values()})
-        print(f"  [{i}/{total}] {sid}: 라벨 {len(labels)}개 → 대표 {groups_n}개")
+    done = 0
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        future_to_sid = {ex.submit(_mapping_for, client, sid, labels): sid
+                         for sid, labels in todo.items()}
+        for fut in as_completed(future_to_sid):
+            sid = future_to_sid[fut]
+            mapping = fut.result()
+            label_map[sid] = mapping
+            done += 1
+            groups_n = len({v for v in mapping.values()})
+            logger.info("[%d/%d] %s: 라벨 %d개 → 대표 %d개", done, len(todo), sid, len(mapping), groups_n)
+            print(f"  [{done}/{len(todo)}] {sid}: 라벨 {len(mapping)}개 → 대표 {groups_n}개")
 
     return label_map
 
@@ -251,10 +270,13 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+    setup_logging("refine")   # 구조화 로그(시작·단계·집계·에러)를 run 로그·파일에 남긴다.
 
     rows = load_rows()
     by_q = collect_labels_by_question(rows)
     total_labels = sum(len(v) for v in by_q.values())
+    logger.info("refine 입력 — 행 %d · 문항 %d · 고유 라벨 %d (model=%s)",
+                len(rows), len(by_q), total_labels, MODEL_NAME)
     print(f"\n응답 라벨 표준화: 문항 {len(by_q)}개 · 고유 라벨 {total_labels}개 ({MODEL_NAME})\n")
 
     client = get_client()
@@ -268,6 +290,7 @@ def main() -> None:
     for mapping in label_map.values():
         merged += len(mapping) - len({v for v in mapping.values()})
 
+    logger.info("refine 완료 — 합쳐진 라벨 %d개 · clean CSV=%s", merged, csv_path.name)
     print("\n" + "=" * 60)
     print(f"라벨 표준화 완료 — 합쳐진 라벨 {merged}개 (서로 다른 표기를 같은 대표로 통합)")
     print(f"💾 라벨 사전  : {map_path}")

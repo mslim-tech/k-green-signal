@@ -1,4 +1,4 @@
-# rag/index.py
+# rag/retrieval/index.py
 # -----------------------------------------------------------------------------
 # 6.2 임베딩 · 인덱싱 (Indexing)
 #
@@ -10,28 +10,17 @@
 # 보안: API Key 는 .env 의 OPENAI_API_KEY 에서만 읽는다(extract.get_client 재사용).
 #
 # 실행:
-#   uv run python rag/index.py          # chunks.jsonl → Chroma 인덱스 구축
+#   uv run python -m rag.retrieval.index          # chunks.jsonl → Chroma 인덱스 구축
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-try:
-    from rag.extract import get_client
-    from rag.config import EMBEDDING_MODEL
-    from rag import chunking
-except ImportError:
-    from extract import get_client
-    from config import EMBEDDING_MODEL
-    import chunking
-
-
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
+from rag.ingest.extract import get_client
+from rag.core.config import EMBEDDING_MODEL
+from rag.retrieval import chunking
+from rag.core.paths import OUTPUT_DIR
 CHROMA_DIR = OUTPUT_DIR / "chroma"
 COLLECTION = "kgs_facts"   # k-green-signal 정형 사실 청크
 EMBED_BATCH = 100          # 임베딩 호출당 청크 수
@@ -66,7 +55,7 @@ def build_index(reset: bool = True) -> int:
     """ 청크를 임베딩해 Chroma 에 적재한다. 적재한 청크 수를 반환. """
     chunks = chunking.load_chunks()
     if not chunks:
-        raise RuntimeError("청크가 없습니다. 먼저 rag/chunking.py 를 실행하세요.")
+        raise RuntimeError("청크가 없습니다. 먼저 rag/retrieval/chunking.py 를 실행하세요.")
 
     client = get_client()
     texts = [c["text"] for c in chunks]

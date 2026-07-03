@@ -1,4 +1,4 @@
-# rag/review.py
+# rag/transform/review.py
 # -----------------------------------------------------------------------------
 # 4단계 4.4: 저신뢰 검수 큐 만들기
 #
@@ -20,21 +20,20 @@
 #     outputs/review_queue.csv  - 검수 대상 행 + review_reasons / review_priority
 #
 # 실행 방법(4.3 플래그가 끝난 뒤):
-#   uv run python rag/review.py
+#   uv run python -m rag.transform.review
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
 import csv
+import logging
 import sys
 from collections import defaultdict
-from pathlib import Path
 
 
-try:
-    from rag.paths import OUTPUT_DIR
-except ImportError:
-    from paths import OUTPUT_DIR
+from rag.core.paths import OUTPUT_DIR
+from rag.core.logging_setup import setup_logging
+logger = logging.getLogger("review")
 SOURCE_CSV = OUTPUT_DIR / "standardized_long.flagged.csv"   # 4.3 산출 (입력, 보존)
 QUEUE_CSV = OUTPUT_DIR / "review_queue.csv"                 # 4.4 산출
 
@@ -45,7 +44,7 @@ HIGH_REASONS = {"low_confidence", "flag_mismatch", "duplicate"}
 def load_rows() -> list[dict]:
     if not SOURCE_CSV.exists():
         raise RuntimeError(
-            f"{SOURCE_CSV} 가 없습니다. 먼저 rag/flags.py 로 4.3 의심값 플래그를 실행하세요."
+            f"{SOURCE_CSV} 가 없습니다. 먼저 rag/transform/flags.py 로 4.3 의심값 플래그를 실행하세요."
         )
     with open(SOURCE_CSV, "r", encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
@@ -92,8 +91,11 @@ def main() -> None:
     except Exception:
         pass
 
+    setup_logging("review")   # 구조화 로그(시작·집계)를 run 로그·파일에 남긴다.
+
     rows = load_rows()
     dup_idx = find_duplicate_rows(rows)
+    logger.info("review 시작 — 입력 %d행 · 중복키 %d행", len(rows), len(dup_idx))
 
     # 검수 대상만 추리고 사유/우선순위 부여
     queue: list[dict] = []
@@ -144,6 +146,8 @@ def main() -> None:
         print(f"  - {reason}: {n}")
     print(f"💾 {QUEUE_CSV}  (입력 {SOURCE_CSV.name} 은 보존)")
     print("=" * 60)
+    logger.info("review 완료 — 검수 큐 %d행(high %d · medium %d) / 전체 %d행 · %s",
+                len(queue), n_high, len(queue) - n_high, len(rows), QUEUE_CSV.name)
 
 
 if __name__ == "__main__":
