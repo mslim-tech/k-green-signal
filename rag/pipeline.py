@@ -297,10 +297,13 @@ def pid_alive(pid: int | None) -> bool:
         return False
     if os.name == "nt":
         # Windows: tasklist 로 확인(POSIX 엔 없는 명령이라 분기).
+        # tasklist 출력은 콘솔 코드페이지(한글이면 cp949)라, PYTHONUTF8=1 등
+        # UTF-8 강제 환경에서 text=True 로 utf-8 디코드하면 0xc1 등에서 깨진다.
+        # 우리는 ASCII 숫자 pid 만 필요하므로 errors="ignore" 로 안전하게 읽는다.
         try:
             out = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8", errors="ignore",
             )
             return str(pid) in out.stdout
         except Exception:
