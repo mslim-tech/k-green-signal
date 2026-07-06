@@ -290,6 +290,41 @@ def _load_external_context():
 _INFLECTION_PP = 5.0   # 인접 연도 |전년대비|가 이 %p 이상이면 '변곡점'으로 표시(⭐)
 
 
+def _shorten(text: str, limit: int = 22) -> str:
+    """ 긴 라벨(정의 전문 등)을 화면용으로 줄인다. 원문 뜻은 검색 대상엔 그대로 쓴다. """
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _change_warning(c) -> str:
+    """ 대형 변화에 붙일 해석 경고. 2023→2024 는 설문 개편 경계라 '개편 영향 가능',
+        그 밖에 |Δ|>15%p 는 '이례적 급변 — 검증 필요'(신호등 헤드라인 규칙과 동일 기준). """
+    if c.prev_year == signals.SCALE_BREAK_FROM and c.year == signals.SCALE_BREAK_TO:
+        return " ⚠️ 개편 영향 가능(2024 조사 개편 구간)"
+    if abs(c.delta) > signals.LARGE_YOY_PP:
+        return " ⚠️ 이례적 급변 — 검증 필요"
+    return ""
+
+
+def _render_big_change_years(inds):
+    """ (MVP 3단계) 선택 키워드 지표들에서 '전년대비 변화 폭이 큰 해'를 자동 탐지해 보여준다.
+        여기서 뽑힌 (연도·키워드)가 다음 단계의 외부 맥락 검색 대상이 된다.
+        추정 없이 실제 값 차이만 쓴다(가짜 점프·집계·척도변경 구간 제외 — big_change_years). """
+    changes = signals.big_change_years(inds, _INFLECTION_PP, set(INDICATOR_CAVEATS))
+    st.divider()
+    st.markdown("**🔎 변화 폭이 큰 해 (외부 맥락 검색 대상)**")
+    if not changes:
+        st.caption(f"이 키워드에서 전년대비 |변화|≥{_INFLECTION_PP:g}%p 인 해가 없습니다.")
+        return
+    st.caption("아래 해들이 데이터가 크게 움직인 시점입니다. 다음 단계에서 그 해의 "
+               "외부 맥락(정책·사회 이슈·언론 등)을 함께 찾아 '참고 해석'으로 보여줍니다. "
+               "⚠️ 표시는 설문 개편·이례적 급변이라 데이터 변화 자체를 유의해 볼 구간입니다.")
+    for c in changes:
+        arrow = "🔺" if c.delta > 0 else "🔻"
+        st.markdown(f"· {arrow} **{c.year}** — {_shorten(c.indicator_label)}·{_shorten(c.series_label)} "
+                    f"**{c.delta:+}%p** ({c.prev_year}→{c.year}){_change_warning(c)}")
+
+
 def _render_inflection_context(inds, query):
     """ 변곡점 × 외부 맥락(#6 해석): 검색어에 관련된 그해 외부 이슈마다, 대표 지표가 그해
         어떻게 움직였는지(전년대비 %p)를 나란히 보여 '이슈 ↔ 데이터 변화'를 대조한다.
@@ -386,6 +421,7 @@ def _render_query_summary(inds, threshold, query, ds_years, full_inds, rows):
 
         st.divider()
         _render_drivers_barriers(full_inds, [t for t in query.lower().split() if t.strip()], rows)
+        _render_big_change_years(inds)
         _render_inflection_context(inds, query)
 
         # 신호가 하나도 없으면(모두 비인접/보합) 최신값만이라도 알려준다.

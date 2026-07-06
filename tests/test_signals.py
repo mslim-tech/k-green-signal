@@ -168,3 +168,40 @@ def test_max_abs_delta_ignores_aggregate_and_caveat():
             _row("x", 2024, "기타", 10.0), _row("x", 2025, "기타", 40.0)]      # Δ30(집계)
     ind = signals.compute_signals(rows, caveated_ids=set())[0]
     assert ind.max_abs_delta == 2.0
+
+
+# --- big_change_years: 외부 맥락 검색 대상 '변화 폭 큰 해' 탐지 -----------------
+
+def test_big_change_years_detects_sorts_and_dedups():
+    # k: 2021→2022 +13, 2023→2024 -20 (그 외 인접 변화는 임계 미만)
+    k = [_row("k", 2020, "인지", 50.0), _row("k", 2021, "인지", 52.0),
+         _row("k", 2022, "인지", 65.0), _row("k", 2023, "인지", 64.0),
+         _row("k", 2024, "인지", 44.0)]
+    # k2: 2021→2022 +25 → 같은 2022 해에서 |Δ| 더 큼 → 2022 대표는 k2 가 이긴다(연도 1건)
+    k2 = [_row("k2", 2021, "관심", 5.0), _row("k2", 2022, "관심", 30.0)]
+    inds = signals.compute_signals(k + k2, caveated_ids=set())
+    changes = signals.big_change_years(inds, threshold_pp=5.0, caveated_ids=set())
+    assert [c.year for c in changes] == [2022, 2024]        # |25| > |20|
+    assert [c.delta for c in changes] == [25.0, -20.0]
+    assert changes[0].indicator_label == "k2" and changes[0].prev_year == 2021
+
+
+def test_big_change_years_excludes_gap_and_aggregate():
+    # 비인접(가짜 점프)·집계 라벨은 검색 대상에서 제외된다.
+    gap = [_row("g", 2017, "인지", 10.0), _row("g", 2023, "인지", 80.0)]       # 간격 6
+    agg = [_row("a", 2024, "기타", 10.0), _row("a", 2025, "기타", 40.0)]       # 집계 Δ30
+    inds = signals.compute_signals(gap + agg, caveated_ids=set())
+    assert signals.big_change_years(inds, threshold_pp=5.0, caveated_ids=set()) == []
+
+
+def test_big_change_years_threshold_and_scale_break():
+    # 척도변경 문항의 '23→'24 큰 변화는 측정방식 변화일 수 있어 제외(신호 규칙과 일관).
+    rows = [_row("c", 2022, "인지", 20.0), _row("c", 2023, "인지", 22.0),
+            _row("c", 2024, "인지", 60.0)]                                     # 2023→2024 +38
+    inds = signals.compute_signals(rows, caveated_ids={"c"})
+    assert signals.big_change_years(inds, threshold_pp=5.0, caveated_ids={"c"}) == []
+    # 척도변경 문항이 아니면 2024 가 검색 대상으로 잡힌다(임계값도 확인)
+    inds2 = signals.compute_signals(rows, caveated_ids=set())
+    got = signals.big_change_years(inds2, threshold_pp=5.0, caveated_ids=set())
+    assert [c.year for c in got] == [2024] and got[0].delta == 38.0
+    assert signals.big_change_years(inds2, threshold_pp=40.0, caveated_ids=set()) == []

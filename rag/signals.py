@@ -279,6 +279,49 @@ def signaled_movers(indicators: list[Indicator],
     return out
 
 
+@dataclass
+class YearChange:
+    """ '전년대비 변화 폭이 큰 해' 한 건 — 외부 맥락 검색의 대상 연도 후보. """
+    year: int                  # 변화가 도착한 해(= prev_year + 1)
+    prev_year: int
+    delta: float               # value[year] - value[prev_year] (%p)
+    indicator_label: str       # 어느 문항에서
+    series_label: str          # 어느 응답 라벨에서
+
+    @property
+    def abs_delta(self) -> float:
+        return abs(self.delta)
+
+
+def big_change_years(indicators: list[Indicator],
+                     threshold_pp: float = 5.0,
+                     caveated_ids: set[str] | None = None) -> list[YearChange]:
+    """ 선택 지표들에서 '전년대비 변화 폭이 큰 해'를 자동 탐지한다(외부 맥락 검색 대상).
+        - 인접 연도(간격 1)·% 단위·비집계 시계열만 본다('가짜 점프'·집계 제외).
+        - 척도변경 문항의 '23→'24 전이는 측정방식 변화일 수 있어 제외(신호 규칙과 일관).
+        - 같은 해가 여러 지표에서 크면 |Δ| 가장 큰 것을 대표로 남긴다(연도 1건).
+        - |Δ| 큰 순으로 정렬해 돌려준다. 추정/보간 없이 실제 값 차이만 쓴다. """
+    caveated = set(caveated_ids) if caveated_ids is not None else set(_caveats_by_std_id())
+    best: dict[int, YearChange] = {}
+    for ind in indicators:
+        for s in ind.series:
+            if s.is_aggregate or s.unit != "%":
+                continue
+            for a, b in zip(s.points, s.points[1:]):
+                if b.year - a.year != 1:              # 인접 연도만(진짜 전년대비)
+                    continue
+                if (ind.std_id in caveated
+                        and a.year == SCALE_BREAK_FROM and b.year == SCALE_BREAK_TO):
+                    continue                          # 척도 변경 구간 — 실제 변화 아닐 수 있음
+                d = round(b.value - a.value, 1)
+                if abs(d) < threshold_pp:
+                    continue
+                cur = best.get(b.year)
+                if cur is None or abs(d) > cur.abs_delta:
+                    best[b.year] = YearChange(b.year, a.year, d, ind.label, s.label)
+    return sorted(best.values(), key=lambda c: c.abs_delta, reverse=True)
+
+
 def caveat_breaks(indicators: list[Indicator]) -> list[tuple]:
     """ 척도변경 구간이라 신호를 보류한 (지표, 시계열) — '⚠️ 해석 유의' 섹션용.
         원값 변화(Δ)는 보여주되 '실제 변화 아님(척도 변경)'으로 분리해 헤드라인에서 뺀다. """
