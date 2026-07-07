@@ -172,6 +172,16 @@ def _ensure_samples_bootstrapped():
         spec.loader.exec_module(mod)
         for line in mod.bootstrap(force=force):
             logger.info("bootstrap(force=%s): %s", force, line)
+        if force:
+            # chroma 파일을 새로 덮어썼으니, 프로세스에 남아 있을 수 있는 옛 chromadb
+            # 시스템 클라이언트 캐시를 비워 다음 get_collection 이 새 인덱스를 읽게 한다
+            # (Streamlit 은 재배포 때 프로세스를 유지할 수 있어 캐시가 남는다). best-effort.
+            try:
+                from chromadb.api.shared_system_client import SharedSystemClient
+                SharedSystemClient.clear_system_cache()
+                logger.info("chromadb 시스템 캐시 초기화 — 새 인덱스 반영")
+            except Exception:
+                logger.exception("chromadb 캐시 초기화 실패(무시)")
     except Exception:
         logger.exception("samples 부트스트랩 실패 — 대시보드 데이터가 없을 수 있음")
 
