@@ -340,7 +340,7 @@ def main():
     _ingest_recover()    # 새로고침으로 세션이 날아갔어도 진행 중 인제스트를 이어받는다.
 
     st.set_page_config(page_title="k-green-signal", layout="wide")
-    st.title("🚦 대한민국 친환경 소비 인지도 실시간 신호등")
+    st.title("🚦 KEITI 녹색소비 인사이트 네비게이터")
     st.caption("k-green-signal · 🚦 대시보드 — 💬 AI에게 묻기 — 🛠 데이터 준비(업로드→인제스트→검수→인덱싱)")
 
     api_key = get_api_key()

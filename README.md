@@ -1,4 +1,4 @@
-# 대한민국 친환경 소비 인지도 실시간 신호등
+# KEITI 녹색소비 인사이트 네비게이터
 
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![uv](https://img.shields.io/badge/uv-managed-DE5FE9?logo=astral&logoColor=white)
