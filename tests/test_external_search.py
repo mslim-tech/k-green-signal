@@ -71,3 +71,31 @@ def test_group_by_category_orders_and_drops_empty():
     ]
     groups = ext.group_by_category(hits)
     assert list(groups.keys()) == [ext.CATEGORY_POLICY, ext.CATEGORY_PRESS]  # 순서 + 빈 유형 제거
+
+
+# ── 실 웹검색 provider의 순수 부분(실 API 호출 없이 검증) ──────────────────────
+
+def test_dispatch_uses_stub_by_default():
+    # use_web 기본 False → 스텁 경로(모든 항목 is_stub=True), 실 API 미호출.
+    hits = ext.search_external_context("그린워싱", 2023, haystack="그린워싱 신뢰 환경표시")
+    assert hits and all(h.is_stub for h in hits)
+
+
+def test_parse_candidates_plain_and_fenced_and_garbage():
+    plain = '{"candidates": [{"category": "정책/제도", "year": 2025, "title": "t", ' \
+            '"summary": "s", "source": "src", "url": "http://x"}]}'
+    assert ext._parse_candidates(plain)[0]["title"] == "t"
+    fenced = "설명...\n```json\n" + plain + "\n```\n꼬리말"
+    assert len(ext._parse_candidates(fenced)) == 1        # 코드펜스·앞뒤 잡음에 관대
+    assert ext._parse_candidates("전혀 JSON 아님") == []    # 실패 시 빈 목록(→ 스텁 폴백)
+
+
+def test_cache_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(ext, "_CACHE_PATH", tmp_path / "external_search_cache.json")
+    assert ext._cache_get("탄소", 2021) is None            # 최초엔 미스
+    hits = [ext.ExternalHit(ext.CATEGORY_POLICY, 2021, "탄소중립기본법", "요약",
+                            "정책브리핑", "http://x", query="탄소 2021", is_stub=False)]
+    ext._cache_put("탄소", 2021, hits)
+    got = ext._cache_get("탄소", 2021)                      # 히트 → ExternalHit 복원
+    assert got and got[0].title == "탄소중립기본법" and got[0].is_stub is False
+    assert ext._cache_get("탄소", 2020) is None            # 키(연도) 다르면 미스

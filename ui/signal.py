@@ -318,20 +318,27 @@ _CATEGORY_EMOJI = {"정책/제도": "🏛", "사회 이슈": "🗣", "언론 보
 def _render_external_context_candidates(query, changes, inds):
     """ (MVP 4단계) 선택한 '변화 큰 해'에 대해 외부 검색어 후보를 만들고, 유형별
         (정책/제도·사회이슈·언론보도) 외부 맥락 후보를 '참고용'으로 보여준다.
-        ⚠️ 지금은 실제 웹검색 API 를 호출하지 않는다 — 큐레이션 사건 기반 '샘플(스텁)'
-        결과다(과금 0). 원인 단정이 아니라 '참고할 만한 외부 맥락 후보'로만 표시한다.
-        실호출을 붙이는 방법은 rag/curate/external_search.py 상단 TODO 참고. """
+        기본은 큐레이션 기반 '샘플(스텁)'(과금 0). '실제 웹검색' 체크 시에만 OpenAI
+        web_search 로 실검색(과금, (키워드,연도) 캐시). 어느 쪽이든 원인 단정이 아니라
+        '참고할 만한 외부 맥락 후보'로만 표시한다. """
     from rag.curate import external_search as ext
 
-    st.markdown("**🌐 관련 외부 맥락 후보 찾기 (4단계 · 현재 샘플)**")
+    st.markdown("**🌐 관련 외부 맥락 후보 찾기 (4단계)**")
     years = sorted({c.year for c in changes}, reverse=True)
     picked = st.selectbox("외부 맥락을 찾아볼 해", years,
                           format_func=lambda y: f"{y}년", key="ext_ctx_year")
+    use_web = st.checkbox(
+        "🌐 실제 웹검색 사용 (과금)", value=False, key="ext_ctx_web",
+        help="끄면 큐레이션 사건 기반 샘플(과금 0). 켜면 OpenAI 웹검색으로 실제 웹을 찾습니다"
+             "(과금 · OPENAI_API_KEY 필요). 같은 (키워드,연도)는 캐시돼 한 번만 과금됩니다. "
+             "키가 없거나 실패하면 자동으로 샘플로 대체합니다.")
     # 그 해의 대표 변화(가장 큰) 한 건 — 검색어 후보의 지표·응답 라벨 재료.
     yc = max((c for c in changes if c.year == picked), key=lambda c: c.abs_delta)
 
-    # 실호출(과금) 흐름을 흉내 내 버튼으로 트리거한다 — 결과는 세션에 담아 재실행에도 유지.
-    if st.button("🔎 이 해의 외부 맥락 후보 보기 (샘플)", key="ext_ctx_go"):
+    # 버튼으로 트리거한다(실검색이면 이때 과금) — 결과는 세션에 담아 재실행에도 유지.
+    btn_label = "🔎 이 해의 외부 맥락 후보 찾기 (실제 웹검색)" if use_web \
+        else "🔎 이 해의 외부 맥락 후보 보기 (샘플)"
+    if st.button(btn_label, key="ext_ctx_go"):
         st.session_state["ext_ctx_shown"] = picked
     if st.session_state.get("ext_ctx_shown") != picked:
         return
@@ -340,14 +347,23 @@ def _render_external_context_candidates(query, changes, inds):
     st.caption("생성된 외부 검색어 후보 (실제 웹검색에 넣을 문자열):")
     st.code("   ·   ".join(queries) if queries else "(검색어 없음)", language=None)
 
-    # 매칭 haystack: 검색어 + 관련 지표명/std_id(넓게) — 변곡점×외부맥락 패널과 같은 관례.
+    # 매칭 haystack: 검색어 + 관련 지표명/std_id(넓게) — 스텁 폴백 매칭에 쓰인다.
     hay = (query + " " + " ".join(f"{i.label} {i.std_id}" for i in inds)).lower()
-    hits = ext.search_external_context(query, picked, haystack=hay, queries=queries)
-    st.caption("⚠️ 아래는 **샘플(스텁)** 결과입니다 — 실제 웹검색을 호출하지 않았습니다(과금 0). "
-               "원인 단정이 아니라 그해를 이해할 **참고할 만한 외부 맥락 후보**입니다.")
+    with st.spinner("외부 웹을 검색하는 중…" if use_web else "후보를 정리하는 중…"):
+        hits = ext.search_external_context(query, picked, haystack=hay,
+                                           queries=queries, use_web=use_web)
+    # 실검색을 요청했는데 결과가 전부 스텁이면 폴백된 것(무키·실패) — 정직하게 알린다.
+    is_real = bool(hits) and all(not h.is_stub for h in hits)
+    if is_real:
+        st.caption("✅ **실제 웹검색** 결과입니다(캐시로 재과금 방지). "
+                   "원인 단정이 아니라 그해를 이해할 **참고할 만한 외부 맥락 후보**입니다.")
+    else:
+        extra = "(웹검색이 안 돼 샘플로 대체했습니다 — 키·모델 지원을 확인하세요) " if use_web else ""
+        st.caption(f"⚠️ 아래는 **샘플(스텁)** 결과입니다 {extra}— 실제 웹검색 아님(과금 0). "
+                   "원인 단정이 아니라 그해를 이해할 **참고할 만한 외부 맥락 후보**입니다.")
     if not hits:
-        st.info("이 키워드·연도에 연결할 외부 맥락 후보가 (샘플에) 없습니다. "
-                "실제 웹검색을 붙이면 이 영역이 채워집니다.")
+        st.info("이 키워드·연도에 연결할 외부 맥락 후보가 없습니다. "
+                "'실제 웹검색 사용'을 켜거나 다른 연도를 골라 보세요.")
         return
     groups = ext.group_by_category(hits)
     for cat in ext.CATEGORY_ORDER:

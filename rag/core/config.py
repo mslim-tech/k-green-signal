@@ -20,6 +20,9 @@ REWRITE_MODEL = "gpt-5.4-mini"     # 질문 재작성 (query rewriting)
 RERANKER_MODEL = "gpt-5.4-mini"    # 검색 결과 재정렬 (reranker)
 EXAMPLE_Q_MODEL = "gpt-5.4-mini"   # 예시 질문 생성
 VISION_MODEL = "gpt-5.4-mini"      # Vision (차트/그림 이미지 판독 등)
+WEB_SEARCH_MODEL = "gpt-5.4-mini"  # 외부 맥락 실 웹검색(Responses API web_search 툴)
+                                   #   web_search 툴 지원 확인 완료(2026-07-07, 실호출 검증).
+                                   #   미지원 모델로 바꿀 땐 이 상수만 검색 지원 모델로 교체.
 
 # --- 데이터 파이프라인(문항 추출/표준화) 작업 -------------------------------
 EXTRACT_MODEL = "gpt-5.4-mini"     # 2단계 LLM 구조화 추출

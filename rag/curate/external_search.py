@@ -1,32 +1,41 @@
 # rag/curate/external_search.py
 # -----------------------------------------------------------------------------
-# 데이터 변화 지점(연도) → '외부 맥락 후보' 검색 — 현재는 과금 없는 스텁.
+# 데이터 변화 지점(연도) → '외부 맥락 후보' 검색.
 #
 # 이 파일의 역할:
 #   - 선택한 키워드 + 변화 연도로 외부 '검색어 후보'를 만든다(build_search_queries).
 #   - 그 검색어로 외부 맥락 후보를 유형별(정책/제도·사회이슈·언론보도)로 돌려준다
-#     (search_external_context). 지금은 실제 웹검색 API를 호출하지 않고, 사람이 이미
-#     확정해 둔 curation/external_context.json 을 재료로 스텁 결과를 만든다(과금 0·결정적).
+#     (search_external_context). 두 가지 provider:
+#       (a) 스텁(기본·과금 0): 사람이 확정해 둔 curation/external_context.json 을 재료로
+#           결정적 결과 생성. 무키·FAKE·E2E·오류 폴백에 쓴다.
+#       (b) 실 웹검색(use_web=True): OpenAI Responses API 의 web_search 툴로 실제 웹을
+#           검색해 유형화한다(과금). (키워드,연도)→결과를 디스크 캐시해 재과금을 막는다.
+#           호출 실패/무키면 조용히 스텁으로 폴백한다(UI 는 절대 안 깨진다).
 #
 # 원칙(두 흐름의 '점선' = 추측 격리): 이 결과는 확정 '데이터'가 아니라 '참고할 만한
-#   외부 맥락 후보'다. 정형 CSV 로 흘려보내지 않고 화면 표시 전용이며, 인과를 단정하지
-#   않는다(그해 이런 맥락이 있었다는 참고일 뿐).
+#   외부 맥락 후보'다. 실검색 결과조차 정형 CSV/인덱스로 흘려보내지 않고 화면 표시 전용이며,
+#   인과를 단정하지 않는다(그해 이런 맥락이 있었다는 참고일 뿐). 확정이 필요하면 사람이
+#   corrections/curation 경로로 올린다(설계결정 #1, 아직 미구현).
 #
-# TODO(실호출 붙이기): search_external_context 의 몸통을 OpenAI 웹검색 provider 로
-#   교체한다 — build_search_queries 로 만든 문자열을 실제 검색에 넣고, 결과 기사들을
-#   _classify 규칙 등으로 유형화해 ExternalHit(is_stub=False)로 반환한다. 재과금을 막게
-#   질의→결과 캐시(디스크)를 앞단에 둔다. 실호출 전까지는 이 스텁으로 화면·구조만 검증.
+# ⚠️ 모델 지원: 실 웹검색은 config.WEB_SEARCH_MODEL 이 web_search 툴을 지원해야 한다.
+#   미지원이면 config 의 그 상수만 검색 지원 모델로 바꾼다(코드 변경 불필요).
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import os
+from dataclasses import asdict, dataclass
 
 # 직접 실행(python rag/curate/external_search.py)과 패키지 import 를 모두 지원(프로젝트 관례).
 try:
     from rag.curate.external_context import load_events
+    from rag.core.paths import OUTPUT_DIR
+    from rag.core.config import WEB_SEARCH_MODEL
 except ImportError:  # 스크립트로 직접 실행할 때
     from external_context import load_events
+    from core.paths import OUTPUT_DIR
+    from core.config import WEB_SEARCH_MODEL
 
 
 # 외부 맥락 후보의 '유형' — 단순 기사 목록이 아니라 문서 유형별로 정리해 보여주기 위함.
@@ -104,19 +113,39 @@ def _headline(full: str) -> str:
 
 def search_external_context(keyword: str, year: int, *,
                             haystack: str = "", queries: list[str] | None = None,
-                            year_window: int = 1) -> list[ExternalHit]:
-    """ (스텁) 검색어 후보로 외부 맥락 후보를 유형별로 돌려준다 — 과금 0·결정적.
+                            year_window: int = 1,
+                            use_web: bool = False) -> list[ExternalHit]:
+    """ 검색어 후보로 외부 맥락 후보를 유형별로 돌려준다.
 
-        지금은 실제 웹검색을 호출하지 않고, 사람이 확정해 둔 external_context.json 을 재료로
-        (대상 연도 ±year_window · 키워드 매치) 후보를 뽑아 유형만 분류한다. '진짜 검색 결과'가
-        아니라 화면·구조를 먼저 검증하기 위한 데모용 결과다(모든 항목 is_stub=True).
+        use_web=False(기본): 스텁(과금 0·결정적) — external_context.json 기반. 아래 _stub_search.
+        use_web=True: OpenAI Responses web_search 툴로 실제 검색(과금). (키워드,연도) 디스크
+          캐시로 재과금을 막고, 무키/오류면 조용히 스텁으로 폴백한다(UI 안전).
 
-        매칭은 프로젝트의 기존 관례(변곡점×외부맥락 패널)와 동일 — 각 사건의 match 태그 중
-        하나라도 haystack(키워드+지표명 등)에 들어 있으면 관련으로 본다. haystack 이 비면
-        keyword 로 대체한다.
+        어느 경로든 반환 항목은 '참고 후보'다(정형 데이터 아님). """
+    if not use_web:
+        return _stub_search(keyword, year, haystack=haystack, queries=queries,
+                            year_window=year_window)
 
-        TODO(실호출): 이 함수 몸통을 OpenAI 웹검색 provider 로 교체한다(위 파일 상단 참고).
-    """
+    cached = _cache_get(keyword, year)
+    if cached is not None:
+        return cached
+    try:
+        hits = _web_search(keyword, year, queries)
+    except Exception:
+        # 키 없음·모델 미지원·네트워크·파싱 실패 등 — 화면이 죽지 않게 스텁으로 폴백.
+        return _stub_search(keyword, year, haystack=haystack, queries=queries,
+                            year_window=year_window)
+    _cache_put(keyword, year, hits)
+    return hits
+
+
+def _stub_search(keyword: str, year: int, *,
+                 haystack: str = "", queries: list[str] | None = None,
+                 year_window: int = 1) -> list[ExternalHit]:
+    """ (스텁) external_context.json 을 재료로 (대상 연도 ±year_window · 키워드 매치) 후보를
+        뽑아 유형만 분류한다 — 과금 0·결정적. 실검색이 불가/불필요할 때의 기본·폴백 경로.
+        매칭은 기존 관례와 동일: 각 사건의 match 태그 중 하나라도 haystack(키워드+지표명 등)에
+        들어 있으면 관련으로 본다. haystack 이 비면 keyword 로 대체. 모든 항목 is_stub=True. """
     hay = (haystack or keyword or "").lower()
     hits: list[ExternalHit] = []
     q0 = (queries or [f"{keyword} {year}".strip()])[0]
@@ -141,6 +170,112 @@ def search_external_context(keyword: str, year: int, *,
     hits.sort(key=lambda h: (CATEGORY_ORDER.index(h.category) if h.category in CATEGORY_ORDER else 9,
                              abs(h.year - year)))
     return hits
+
+
+# ── 실 웹검색 provider (OpenAI Responses API · web_search 툴) ─────────────────
+#    참고 후보만 만들며 인과를 단정하지 않게 프롬프트로 강제한다.
+_WEB_PROMPT = (
+    "너는 한국의 환경·소비 정책 리서처다. 아래 검색어들로 웹을 검색해, '{kw}'와 관련해 "
+    "{year}년(전후 1년 포함) 대한민국에서 실제로 있었던 일을 최대 6건 찾아라.\n"
+    "검색어 후보: {queries}\n\n"
+    "각 항목을 유형으로 나눠라 — 반드시 다음 셋 중 하나: '정책/제도', '사회 이슈', '언론 보도'.\n"
+    "실제 출처(기관/매체명)와 원문 URL을 반드시 포함하라. 추측·창작 금지(찾은 것만).\n"
+    "인과를 단정하지 마라(‘이 변화의 원인’ 같은 표현 금지) — 그해 참고 맥락일 뿐이다.\n\n"
+    "오직 아래 JSON 만 출력하라(설명 문장 없이):\n"
+    '{{"candidates": [{{"category": "정책/제도|사회 이슈|언론 보도", "year": 2025, '
+    '"title": "짧은 제목", "summary": "한 줄 요약", "source": "매체/기관", "url": "https://..."}}]}}'
+)
+
+
+def _web_search(keyword: str, year: int, queries: list[str] | None) -> list[ExternalHit]:
+    """ Responses API 의 web_search 툴로 실제 검색 → JSON 파싱 → ExternalHit(is_stub=False).
+        키가 없으면 get_client() 가 예외를 던져 상위에서 스텁으로 폴백된다. """
+    try:
+        from rag.ingest.extract import get_client
+    except ImportError:
+        from ingest.extract import get_client
+
+    qs = ", ".join(queries or [f"{keyword} {year}"])
+    prompt = _WEB_PROMPT.format(kw=keyword or "(키워드 없음)", year=year, queries=qs)
+    client = get_client()
+    resp = client.responses.create(
+        model=WEB_SEARCH_MODEL,
+        tools=[{"type": "web_search"}],
+        input=prompt,
+    )
+    data = _parse_candidates(getattr(resp, "output_text", "") or "")
+    q0 = (queries or [f"{keyword} {year}".strip()])[0]
+    hits: list[ExternalHit] = []
+    for c in data:
+        cat = c.get("category")
+        if cat not in CATEGORY_ORDER:
+            cat = CATEGORY_PRESS                 # 알 수 없는 유형은 '언론 보도'로
+        try:
+            cy = int(c.get("year") or year)
+        except (TypeError, ValueError):
+            cy = year
+        hits.append(ExternalHit(
+            category=cat, year=cy,
+            title=(c.get("title") or "").strip(),
+            summary=(c.get("summary") or "").strip(),
+            source=(c.get("source") or "").strip(),
+            url=(c.get("url") or "").strip(),
+            query=q0, is_stub=False,
+        ))
+    hits.sort(key=lambda h: (CATEGORY_ORDER.index(h.category) if h.category in CATEGORY_ORDER else 9,
+                             abs(h.year - year)))
+    return hits
+
+
+def _parse_candidates(text: str) -> list[dict]:
+    """ 모델 출력에서 candidates 리스트를 꺼낸다. 코드펜스/앞뒤 잡음에 관대하게 — 첫 '{' ~ 마지막
+        '}' 구간을 JSON 으로 시도한다. 실패하면 빈 목록(상위에서 스텁 폴백). """
+    t = (text or "").strip()
+    if "```" in t:                                # ```json ... ``` 펜스 제거
+        t = t.split("```")[1] if len(t.split("```")) > 1 else t
+        t = t.split("\n", 1)[-1] if t.lower().startswith("json") else t
+    i, j = t.find("{"), t.rfind("}")
+    if i == -1 or j == -1 or j < i:
+        return []
+    try:
+        obj = json.loads(t[i:j + 1])
+    except json.JSONDecodeError:
+        return []
+    cands = obj.get("candidates", []) if isinstance(obj, dict) else []
+    return [c for c in cands if isinstance(c, dict)]
+
+
+# ── (키워드,연도) → 결과 디스크 캐시: 같은 조회의 재과금을 막는다 ───────────────
+_CACHE_PATH = OUTPUT_DIR / "external_search_cache.json"
+
+
+def _cache_key(keyword: str, year: int) -> str:
+    return f"{(keyword or '').strip().lower()}|{year}"
+
+
+def _cache_load() -> dict:
+    try:
+        return json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _cache_get(keyword: str, year: int) -> list[ExternalHit] | None:
+    rec = _cache_load().get(_cache_key(keyword, year))
+    if rec is None:
+        return None
+    return [ExternalHit(**h) for h in rec]
+
+
+def _cache_put(keyword: str, year: int, hits: list[ExternalHit]) -> None:
+    """ 캐시에 저장(디렉터리 없으면 만든다). 쓰기 실패는 조용히 무시(캐시는 최적화일 뿐). """
+    try:
+        data = _cache_load()
+        data[_cache_key(keyword, year)] = [asdict(h) for h in hits]
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CACHE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def group_by_category(hits: list[ExternalHit]) -> dict[str, list[ExternalHit]]:
