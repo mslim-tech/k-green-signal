@@ -117,27 +117,42 @@ def render_next_step_nav(ctx: dict, step: int) -> None:
 
 @st.cache_resource
 def _ensure_samples_bootstrapped():
-    """ 클라우드/신규 클론 편의 — 기본 outputs/ 가 비어 있으면 samples/ 레퍼런스를 펼친다.
+    """ 클라우드/신규 클론 편의 — samples/ 레퍼런스를 작업 폴더 outputs/ 로 펼친다.
 
-    Streamlit Community Cloud 는 저장소만 체크아웃하므로(작업 폴더 outputs/ 는 .gitignore
-    라 존재하지 않음), 레퍼런스(samples/outputs — 정형 CSV·청크·Chroma 인덱스)를 outputs/
-    로 복사해 대시보드가 키 없이 바로 뜨게 한다. @st.cache_resource 로 프로세스당 1회만 돈다.
-    - RAG_OUTPUT_DIR 로 산출물을 다른 곳(E2E 임시본 등)으로 돌린 경우엔 건드리지 않는다.
-    - 이미 outputs/ 에 정형 CSV 가 있으면(로컬 개발·재부팅) 순수 no-op.
+    Streamlit Community Cloud 는 재부팅 시 기존 체크아웃에 git pull 만 하고 작업 폴더
+    (outputs/ — .gitignore)는 그대로 두므로, '비어 있을 때만 채우기'로는 데이터 업데이트가
+    반영되지 않는다. 그래서 레퍼런스에 버전 스탬프(.dataset_version)를 두고, 배포본의
+    스탬프와 다르면 강제로 다시 펼친다. @st.cache_resource 로 프로세스당 1회 실행.
+      - outputs/ 가 비어 있으면            → 최초 전개(force=False)
+      - 배포본 스탬프 ≠ 레퍼런스 스탬프    → 갱신(force=True, 이전 bootstrap 산출을 덮어씀)
+      - 로컬 개발자의 직접 만든 outputs/   → 스탬프가 없으므로 건드리지 않는다(자기 작업 보호)
+      - RAG_OUTPUT_DIR 지정(E2E 등)        → 미개입
     """
     if os.getenv("RAG_OUTPUT_DIR"):
         return
-    if ((OUTPUT_DIR / "standardized_long.dedup.csv").exists()
-            or (OUTPUT_DIR / "standardized_long.clean.csv").exists()):
-        return
+    root = Path(__file__).resolve().parent
+    ref_stamp = (root / "samples" / "outputs" / ".dataset_version")
+    cur_stamp = (OUTPUT_DIR / ".dataset_version")
+    has_csv = ((OUTPUT_DIR / "standardized_long.dedup.csv").exists()
+               or (OUTPUT_DIR / "standardized_long.clean.csv").exists())
+
+    ref_ver = ref_stamp.read_text(encoding="utf-8").strip() if ref_stamp.exists() else None
+    cur_ver = cur_stamp.read_text(encoding="utf-8").strip() if cur_stamp.exists() else None
+
+    if not has_csv:
+        force = False                         # 비어 있음 → 최초 전개
+    elif cur_ver is not None and ref_ver is not None and cur_ver != ref_ver:
+        force = True                          # bootstrap 이 만든 배포본이 낡음 → 갱신
+    else:
+        return                                # 최신이거나, 스탬프 없는 사용자 작업 → 미개입
     try:
         import importlib.util
-        script = Path(__file__).resolve().parent / "scripts" / "bootstrap_samples.py"
+        script = root / "scripts" / "bootstrap_samples.py"
         spec = importlib.util.spec_from_file_location("bootstrap_samples", script)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        for line in mod.bootstrap(force=False):
-            logger.info("bootstrap: %s", line)
+        for line in mod.bootstrap(force=force):
+            logger.info("bootstrap(force=%s): %s", force, line)
     except Exception:
         logger.exception("samples 부트스트랩 실패 — 대시보드 데이터가 없을 수 있음")
 
