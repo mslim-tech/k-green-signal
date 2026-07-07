@@ -140,6 +140,11 @@ def _ensure_samples_bootstrapped():
     ref_ver = ref_stamp.read_text(encoding="utf-8").strip() if ref_stamp.exists() else None
     cur_ver = cur_stamp.read_text(encoding="utf-8").strip() if cur_stamp.exists() else None
 
+    # Streamlit Community Cloud 는 앱을 /mount/src/<repo> 아래에 체크아웃한다. 그곳의
+    # outputs/ 는 오직 bootstrap 이 만든 관리본이며 사람이 파일을 편집하지 않는다 →
+    # 스탬프가 없으면 옛 배포본이므로 무조건 갱신해도 안전하다(로컬은 이 경로가 아님).
+    on_cloud = str(root).replace("\\", "/").startswith("/mount/src")
+
     def _outputs_is_pristine() -> bool:
         # bootstrap 이 만든 그대로인가 — 즉 outputs/ 의 최상위 항목이 모두 레퍼런스에도
         # 있는가(runs/·캐시·백업 등 '사용자 작업 흔적'이 하나도 없으면 pristine).
@@ -152,10 +157,12 @@ def _ensure_samples_bootstrapped():
         force = False                         # 비어 있음 → 최초 전개
     elif ref_ver is not None and cur_ver is not None and cur_ver != ref_ver:
         force = True                          # 스탬프 불일치 → 낡은 배포본 갱신
-    elif ref_ver is not None and cur_ver is None and _outputs_is_pristine():
-        force = True                          # 스탬프 도입 前 bootstrap 배포본(무편집) → 갱신
+    elif ref_ver is not None and cur_ver is None and (on_cloud or _outputs_is_pristine()):
+        force = True                          # 스탬프 도입 前 bootstrap 배포본 → 갱신
     else:
         return                                # 최신이거나, 스탬프 없는 사용자 작업 → 미개입
+    logger.info("samples 갱신 판단 — force=%s, on_cloud=%s, cur_ver=%s, ref_ver=%s",
+                force, on_cloud, cur_ver, ref_ver)
     try:
         import importlib.util
         script = root / "scripts" / "bootstrap_samples.py"
