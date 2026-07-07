@@ -7,9 +7,6 @@
 # -----------------------------------------------------------------------------
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import streamlit as st
 
 from rag.retrieval import chunking
@@ -274,20 +271,7 @@ def _render_drivers_barriers(full_inds, terms, rows):
             st.caption("비구매 이유 데이터 없음")
 
 
-# 프로젝트 루트 = ui/ 의 상위. (이 파일이 app.py 에서 ui/ 로 분리되며 부모가 한 단계 깊어졌다.)
-_EXTERNAL_CONTEXT_PATH = Path(__file__).resolve().parent.parent / "curation" / "external_context.json"
-
-
-@st.cache_data
-def _load_external_context():
-    """ 큐레이션된 외부 맥락(뉴스) 항목. 파일 없거나 깨지면 빈 목록(기능만 비활성). """
-    try:
-        return json.loads(_EXTERNAL_CONTEXT_PATH.read_text(encoding="utf-8")).get("entries", [])
-    except Exception:
-        return []
-
-
-_INFLECTION_PP = 5.0   # 인접 연도 |전년대비|가 이 %p 이상이면 '변곡점'으로 표시(⭐)
+_INFLECTION_PP = 5.0   # 인접 연도 |전년대비|가 이 %p 이상이면 '변화 폭 큰 해'로 잡는 임계(%p)
 
 
 def _shorten(text: str, limit: int = 22) -> str:
@@ -306,9 +290,9 @@ def _change_warning(c) -> str:
     return ""
 
 
-def _render_big_change_years(inds):
+def _render_big_change_years(inds, query):
     """ (MVP 3단계) 선택 키워드 지표들에서 '전년대비 변화 폭이 큰 해'를 자동 탐지해 보여준다.
-        여기서 뽑힌 (연도·키워드)가 다음 단계의 외부 맥락 검색 대상이 된다.
+        여기서 뽑힌 (연도·키워드)가 다음 단계(4단계)의 외부 맥락 검색 대상이 된다.
         추정 없이 실제 값 차이만 쓴다(가짜 점프·집계·척도변경 구간 제외 — big_change_years). """
     changes = signals.big_change_years(inds, _INFLECTION_PP, set(INDICATOR_CAVEATS))
     st.divider()
@@ -316,67 +300,69 @@ def _render_big_change_years(inds):
     if not changes:
         st.caption(f"이 키워드에서 전년대비 |변화|≥{_INFLECTION_PP:g}%p 인 해가 없습니다.")
         return
-    st.caption("아래 해들이 데이터가 크게 움직인 시점입니다. 다음 단계에서 그 해의 "
-               "외부 맥락(정책·사회 이슈·언론 등)을 함께 찾아 '참고 해석'으로 보여줍니다. "
+    st.caption("아래 해들이 데이터가 크게 움직인 시점입니다. 그 해를 골라 아래에서 "
+               "외부 맥락(정책·사회 이슈·언론 등) 후보를 유형별로 찾아 '참고 해석'으로 봅니다. "
                "⚠️ 표시는 설문 개편·이례적 급변이라 데이터 변화 자체를 유의해 볼 구간입니다.")
     for c in changes:
         arrow = "🔺" if c.delta > 0 else "🔻"
         st.markdown(f"· {arrow} **{c.year}** — {_shorten(c.indicator_label)}·{_shorten(c.series_label)} "
                     f"**{c.delta:+}%p** ({c.prev_year}→{c.year}){_change_warning(c)}")
 
+    _render_external_context_candidates(query, changes, inds)
 
-def _render_inflection_context(inds, query):
-    """ 변곡점 × 외부 맥락(#6 해석): 검색어에 관련된 그해 외부 이슈마다, 대표 지표가 그해
-        어떻게 움직였는지(전년대비 %p)를 나란히 보여 '이슈 ↔ 데이터 변화'를 대조한다.
-        인접 연도 |Δ|≥임계면 ⭐변곡점 표시. ⚠️ 척도 변경 구간('22~'24 caveat 지표)의 변화는
-        측정 방식 변화일 수 있어 변곡점으로 보지 않는다. 상관/맥락이며 인과 단정 아님. """
-    entries = _load_external_context()
-    if not entries:
+
+# 외부 맥락 후보 유형별 아이콘(external_search.CATEGORY_* 와 1:1).
+_CATEGORY_EMOJI = {"정책/제도": "🏛", "사회 이슈": "🗣", "언론 보도": "📰"}
+
+
+def _render_external_context_candidates(query, changes, inds):
+    """ (MVP 4단계) 선택한 '변화 큰 해'에 대해 외부 검색어 후보를 만들고, 유형별
+        (정책/제도·사회이슈·언론보도) 외부 맥락 후보를 '참고용'으로 보여준다.
+        ⚠️ 지금은 실제 웹검색 API 를 호출하지 않는다 — 큐레이션 사건 기반 '샘플(스텁)'
+        결과다(과금 0). 원인 단정이 아니라 '참고할 만한 외부 맥락 후보'로만 표시한다.
+        실호출을 붙이는 방법은 rag/curate/external_search.py 상단 TODO 참고. """
+    from rag.curate import external_search as ext
+
+    st.markdown("**🌐 관련 외부 맥락 후보 찾기 (4단계 · 현재 샘플)**")
+    years = sorted({c.year for c in changes}, reverse=True)
+    picked = st.selectbox("외부 맥락을 찾아볼 해", years,
+                          format_func=lambda y: f"{y}년", key="ext_ctx_year")
+    # 그 해의 대표 변화(가장 큰) 한 건 — 검색어 후보의 지표·응답 라벨 재료.
+    yc = max((c for c in changes if c.year == picked), key=lambda c: c.abs_delta)
+
+    # 실호출(과금) 흐름을 흉내 내 버튼으로 트리거한다 — 결과는 세션에 담아 재실행에도 유지.
+    if st.button("🔎 이 해의 외부 맥락 후보 보기 (샘플)", key="ext_ctx_go"):
+        st.session_state["ext_ctx_shown"] = picked
+    if st.session_state.get("ext_ctx_shown") != picked:
         return
-    # 대표 지표 = 커버리지(연도 수) 최장. 그 대표 시계열 값을 연도별로.
-    ind = max(inds, key=lambda i: len(_summary_headline_series(i).points))
-    s = _summary_headline_series(ind)
-    byyear = {p.year: p.value for p in s.points}
-    # 이벤트 매칭은 검색어+관련 지표 전체로(넓게), 데이터 변화는 대표 지표로(구체).
+
+    queries = ext.build_search_queries(query, picked, yc.indicator_label, yc.series_label)
+    st.caption("생성된 외부 검색어 후보 (실제 웹검색에 넣을 문자열):")
+    st.code("   ·   ".join(queries) if queries else "(검색어 없음)", language=None)
+
+    # 매칭 haystack: 검색어 + 관련 지표명/std_id(넓게) — 변곡점×외부맥락 패널과 같은 관례.
     hay = (query + " " + " ".join(f"{i.label} {i.std_id}" for i in inds)).lower()
-    evs = sorted([e for e in entries if any(kw.lower() in hay for kw in e.get("match", []))],
-                 key=lambda e: e.get("year", 0))
-    if not evs:
+    hits = ext.search_external_context(query, picked, haystack=hay, queries=queries)
+    st.caption("⚠️ 아래는 **샘플(스텁)** 결과입니다 — 실제 웹검색을 호출하지 않았습니다(과금 0). "
+               "원인 단정이 아니라 그해를 이해할 **참고할 만한 외부 맥락 후보**입니다.")
+    if not hits:
+        st.info("이 키워드·연도에 연결할 외부 맥락 후보가 (샘플에) 없습니다. "
+                "실제 웹검색을 붙이면 이 영역이 채워집니다.")
         return
-    caveated = ind.std_id in INDICATOR_CAVEATS
-    st.divider()
-    st.markdown("**📈 변곡점 × 외부 맥락**")
-    st.caption(f"검색어 관련 그해 환경 이슈와, 대표 지표 '{ind.label}·{s.label}'의 그해 변화를 "
-               "대조합니다. ⭐는 그해가 데이터 변곡점(전년대비 큰 변화)임을 뜻합니다. "
-               "상관·맥락이며 인과를 단정하지 않습니다. "
-               "💡 데이터×사건을 엮은 **상세 해석은 '데이터 기반 제언' 모드**에서 받을 수 있습니다.")
-    # 설문 데이터가 있는 연도(대조 가능)와 그 이전(배경 맥락)을 분리해 '데이터 없음' 노이즈를 없앤다.
-    min_dy = min(byyear) if byyear else None
-    overlap = [e for e in evs if min_dy is not None and e.get("year", 0) >= min_dy]
-    background = [e for e in evs if min_dy is None or e.get("year", 0) < min_dy]
-    for e in overlap:
-        y = e.get("year")
-        head = f"· **{y}** {e.get('title','')} — [출처: {e.get('source','')}]({e.get('url','')})"
-        prev = [yr for yr in byyear if yr < y]
-        if y in byyear and prev:
-            py = max(prev)
-            d = round(byyear[y] - byyear[py], 1)
-            gap = y - py
-            if caveated and y in (2023, 2024):
-                tail = f"　↔ 데이터 {py}→{y}: {byyear[py]}→{byyear[y]} (⚠️ 척도 변경 구간 — 해석 유의)"
-            else:
-                star = " ⭐변곡점" if (gap == 1 and abs(d) >= _INFLECTION_PP) else ""
-                near = "" if gap == 1 else f"({py}→{y}, {gap}년 간격)"
-                tail = f"　↔ 데이터 전년대비 **{d:+}%p**{near}{star}"
-        else:
-            tail = f"　↔ 데이터 {y}년 {byyear[y]}{s.unit or ''} (직전 연도 없음)" if y in byyear \
-                else "　↔ 이 지표엔 그해 데이터 없음"
-        st.markdown(head + "  \n" + tail)
-    if background:
-        st.caption("🕰 배경 (설문 데이터 이전 — 대조할 값은 없지만 '어떻게 여기까지 왔는가' 맥락):")
-        for e in background:
-            st.markdown(f"· {e.get('year')} {e.get('title','')} — "
-                        f"[출처: {e.get('source','')}]({e.get('url','')})")
+    groups = ext.group_by_category(hits)
+    for cat in ext.CATEGORY_ORDER:
+        chits = groups.get(cat)
+        if not chits:
+            continue
+        st.markdown(f"**{_CATEGORY_EMOJI.get(cat, '•')} {cat}**")
+        for h in chits:
+            with st.container(border=True):
+                st.markdown(f"**{h.title}** · {h.year}년")
+                st.caption(f"요약: {h.summary}")
+                if h.url:
+                    st.caption(f"[출처: {h.source}]({h.url})")
+                else:
+                    st.caption(f"출처: {h.source}")
 
 
 def _render_query_summary(inds, threshold, query, ds_years, full_inds, rows):
@@ -421,8 +407,7 @@ def _render_query_summary(inds, threshold, query, ds_years, full_inds, rows):
 
         st.divider()
         _render_drivers_barriers(full_inds, [t for t in query.lower().split() if t.strip()], rows)
-        _render_big_change_years(inds)
-        _render_inflection_context(inds, query)
+        _render_big_change_years(inds, query)
 
         # 신호가 하나도 없으면(모두 비인접/보합) 최신값만이라도 알려준다.
         if not movers:
