@@ -131,18 +131,29 @@ def _ensure_samples_bootstrapped():
     if os.getenv("RAG_OUTPUT_DIR"):
         return
     root = Path(__file__).resolve().parent
-    ref_stamp = (root / "samples" / "outputs" / ".dataset_version")
-    cur_stamp = (OUTPUT_DIR / ".dataset_version")
+    ref_dir = root / "samples" / "outputs"
+    ref_stamp = ref_dir / ".dataset_version"
+    cur_stamp = OUTPUT_DIR / ".dataset_version"
     has_csv = ((OUTPUT_DIR / "standardized_long.dedup.csv").exists()
                or (OUTPUT_DIR / "standardized_long.clean.csv").exists())
 
     ref_ver = ref_stamp.read_text(encoding="utf-8").strip() if ref_stamp.exists() else None
     cur_ver = cur_stamp.read_text(encoding="utf-8").strip() if cur_stamp.exists() else None
 
+    def _outputs_is_pristine() -> bool:
+        # bootstrap 이 만든 그대로인가 — 즉 outputs/ 의 최상위 항목이 모두 레퍼런스에도
+        # 있는가(runs/·캐시·백업 등 '사용자 작업 흔적'이 하나도 없으면 pristine).
+        if not ref_dir.exists():
+            return False
+        ref_names = {p.name for p in ref_dir.iterdir()}
+        return all(p.name in ref_names for p in OUTPUT_DIR.iterdir())
+
     if not has_csv:
         force = False                         # 비어 있음 → 최초 전개
-    elif cur_ver is not None and ref_ver is not None and cur_ver != ref_ver:
-        force = True                          # bootstrap 이 만든 배포본이 낡음 → 갱신
+    elif ref_ver is not None and cur_ver is not None and cur_ver != ref_ver:
+        force = True                          # 스탬프 불일치 → 낡은 배포본 갱신
+    elif ref_ver is not None and cur_ver is None and _outputs_is_pristine():
+        force = True                          # 스탬프 도입 前 bootstrap 배포본(무편집) → 갱신
     else:
         return                                # 최신이거나, 스탬프 없는 사용자 작업 → 미개입
     try:
