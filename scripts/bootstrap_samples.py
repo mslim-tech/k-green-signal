@@ -58,7 +58,10 @@ def bootstrap(force: bool = False) -> list[str]:
             target = dst / item.name
             if item.is_dir():
                 if target.exists() and force:
-                    shutil.rmtree(target)
+                    # ignore_errors: 배포 중 실행 프로세스가 chroma sqlite 핸들을 쥐고 있어도
+                    # rmtree 가 예외로 죽지 않게 한다. 지우지 못한 파일은 이어지는 copytree 가
+                    # 새 내용으로 덮어쓴다(새 sqlite·세그먼트로 교체 → 이후 새 클라이언트가 읽음).
+                    shutil.rmtree(target, ignore_errors=True)
                 shutil.copytree(item, target, dirs_exist_ok=True)
             else:
                 shutil.copy2(item, target)
