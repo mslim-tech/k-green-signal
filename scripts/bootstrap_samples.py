@@ -35,21 +35,22 @@ def _has_files(d: Path) -> bool:
     return d.exists() and any(p.is_file() for p in d.rglob("*"))
 
 
-def main() -> None:
-    force = "--force" in sys.argv[1:]
+def bootstrap(force: bool = False) -> list[str]:
+    """ samples/ 레퍼런스를 작업 폴더(data/·outputs/)로 펼친다. 진행 메시지 목록을 반환.
 
-    if not (ROOT / "samples").exists():
-        print("❌ samples/ 가 없습니다. 저장소를 제대로 클론했는지 확인하세요.")
-        raise SystemExit(1)
-
+    작업 폴더에 이미 파일이 있으면 덮어쓰지 않는다(force=True 면 레퍼런스로 초기화).
+    앱 시작 배선(app.py)과 CLI(main) 가 공유하는 단일 구현 — 클라우드 배포 시
+    outputs/ 가 비어 있으면 여기서 레퍼런스를 채워 대시보드가 키 없이 바로 뜬다.
+    """
+    msgs: list[str] = []
     for src, dst in PAIRS:
         rel = dst.name
         if not src.exists():
-            print(f"⚠️  {src} 없음 — 건너뜀")
+            msgs.append(f"⚠️  {src} 없음 — 건너뜀")
             continue
         if _has_files(dst) and not force:
-            print(f"⏭️  {rel}/ 에 이미 파일이 있어 건너뜀(자기 작업 보호). "
-                  f"레퍼런스로 초기화하려면 --force")
+            msgs.append(f"⏭️  {rel}/ 에 이미 파일이 있어 건너뜀(자기 작업 보호). "
+                        f"레퍼런스로 초기화하려면 --force")
             continue
         dst.mkdir(parents=True, exist_ok=True)
         n = 0
@@ -62,7 +63,19 @@ def main() -> None:
             else:
                 shutil.copy2(item, target)
             n += 1
-        print(f"✅ {src.relative_to(ROOT)} → {rel}/  ({n}개 항목 복사)")
+        msgs.append(f"✅ {src.relative_to(ROOT)} → {rel}/  ({n}개 항목 복사)")
+    return msgs
+
+
+def main() -> None:
+    force = "--force" in sys.argv[1:]
+
+    if not (ROOT / "samples").exists():
+        print("❌ samples/ 가 없습니다. 저장소를 제대로 클론했는지 확인하세요.")
+        raise SystemExit(1)
+
+    for line in bootstrap(force=force):
+        print(line)
 
     print("\n다음 단계:")
     print("  1) (선택) RAG 답변 생성을 쓰려면  cp .env.example .env  후 OPENAI_API_KEY 채우기")

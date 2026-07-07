@@ -115,6 +115,33 @@ def render_next_step_nav(ctx: dict, step: int) -> None:
 
 
 
+@st.cache_resource
+def _ensure_samples_bootstrapped():
+    """ 클라우드/신규 클론 편의 — 기본 outputs/ 가 비어 있으면 samples/ 레퍼런스를 펼친다.
+
+    Streamlit Community Cloud 는 저장소만 체크아웃하므로(작업 폴더 outputs/ 는 .gitignore
+    라 존재하지 않음), 레퍼런스(samples/outputs — 정형 CSV·청크·Chroma 인덱스)를 outputs/
+    로 복사해 대시보드가 키 없이 바로 뜨게 한다. @st.cache_resource 로 프로세스당 1회만 돈다.
+    - RAG_OUTPUT_DIR 로 산출물을 다른 곳(E2E 임시본 등)으로 돌린 경우엔 건드리지 않는다.
+    - 이미 outputs/ 에 정형 CSV 가 있으면(로컬 개발·재부팅) 순수 no-op.
+    """
+    if os.getenv("RAG_OUTPUT_DIR"):
+        return
+    if ((OUTPUT_DIR / "standardized_long.dedup.csv").exists()
+            or (OUTPUT_DIR / "standardized_long.clean.csv").exists()):
+        return
+    try:
+        import importlib.util
+        script = Path(__file__).resolve().parent / "scripts" / "bootstrap_samples.py"
+        spec = importlib.util.spec_from_file_location("bootstrap_samples", script)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        for line in mod.bootstrap(force=False):
+            logger.info("bootstrap: %s", line)
+    except Exception:
+        logger.exception("samples 부트스트랩 실패 — 대시보드 데이터가 없을 수 있음")
+
+
 def _index_count() -> int:
     """ 현재 Chroma 인덱스의 청크 수(없으면 0). """
     try:
@@ -281,6 +308,9 @@ def main():
     logfile = setup_logging("app")
     st.session_state.setdefault("logfile", str(logfile))
     st.session_state.setdefault("step", 1)
+    # 신규 클론·클라우드 배포에서 outputs/ 가 비어 있으면 samples/ 레퍼런스를 펼친다
+    # (build_ctx 가 정형 CSV 를 읽기 전에 — 프로세스당 1회).
+    _ensure_samples_bootstrapped()
     _ingest_recover()    # 새로고침으로 세션이 날아갔어도 진행 중 인제스트를 이어받는다.
 
     st.set_page_config(page_title="k-green-signal", layout="wide")
