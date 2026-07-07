@@ -115,14 +115,15 @@ def render_next_step_nav(ctx: dict, step: int) -> None:
 
 
 
-@st.cache_resource
 def _ensure_samples_bootstrapped():
     """ 클라우드/신규 클론 편의 — samples/ 레퍼런스를 작업 폴더 outputs/ 로 펼친다.
 
     Streamlit Community Cloud 는 재부팅 시 기존 체크아웃에 git pull 만 하고 작업 폴더
     (outputs/ — .gitignore)는 그대로 두므로, '비어 있을 때만 채우기'로는 데이터 업데이트가
     반영되지 않는다. 그래서 레퍼런스에 버전 스탬프(.dataset_version)를 두고, 배포본의
-    스탬프와 다르면 강제로 다시 펼친다. @st.cache_resource 로 프로세스당 1회 실행.
+    스탬프와 다르면 강제로 다시 펼친다. 스탬프가 최신이면 stat 몇 번 뒤 즉시 반환하므로
+    (재복사 없음) 일부러 @st.cache_resource 로 감싸지 않는다 — 캐시하면 push 로 코드만
+    바뀌고 프로세스가 유지될 때 갱신 로직이 캐시에 막혀 데이터가 반영되지 않기 때문.
       - outputs/ 가 비어 있으면            → 최초 전개(force=False)
       - 배포본 스탬프 ≠ 레퍼런스 스탬프    → 갱신(force=True, 이전 bootstrap 산출을 덮어씀)
       - 로컬 개발자의 직접 만든 outputs/   → 스탬프가 없으므로 건드리지 않는다(자기 작업 보호)
