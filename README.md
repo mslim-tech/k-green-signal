@@ -97,7 +97,8 @@ flowchart TD
 | **3. 표준화** | `rag/transform/standardize.py` | 연도별 문항을 표준 문항 ID로 통합 → Long CSV | ✅ |
 | **4. 정제·통합** | `rag/transform/{refine,dedup,flags,review}.py` | 라벨 표준화·중복 분리·의심값 플래그·검수 큐 | ✅ |
 | **5. 검수 UI** | `ui/review.py`(스텝퍼 3단계) + `rag/curate/corrections.py` | 저신뢰 행을 사람이 원문과 대조·수정 → `corrections.jsonl` | ✅ |
-| **6. RAG 검색** | `rag/retrieval/{chunking,index,routing,retriever,answer}.py` | 정형 데이터 위 **근거 인용 질의응답**(Chroma 벡터검색 → **LLM rerank** → 출처 인용 답변). **두 모드**(`cite` 사실 인용 · `advise` 데이터 기반 제언 — KEEP/ADD/DROP/FIX 다면검색) + **상세도**(요약/표준/상세) + **질문 재작성**(recall↑)·**예시 질문**. 방법론 '비교 유의'·**외부 맥락(그해 사건)** 지식청크도 함께 인덱싱·검색 → advise가 **데이터 변화를 사건과 엮어 상황 해석**(상관·인과 구분) | ✅ 기본 |
+| **6. RAG 검색** | `rag/retrieval/{chunking,index,routing,retriever,answer}.py` | 정형 데이터 위 **근거 인용 질의응답**(Chroma 벡터검색 → **LLM rerank** → 출처 인용 답변). **두 모드**(`cite` 사실 인용 · `advise` 데이터 기반 제언 — KEEP/ADD/DROP/FIX 다면검색) + **상세도**(요약/표준/상세) + **질문 재작성**(recall↑)·**예시 질문**. 방법론 '비교 유의'·**외부 맥락(그해 사건)**·**보고서 시사점(연구원 정성 결론)** 지식청크도 함께 인덱싱·검색 → advise가 **데이터 변화를 사건·시사점과 엮어 상황 해석**(상관·인과 구분) | ✅ 기본 |
+| **6k. 지식 소스(큐레이션)** | `curation/{methodology_notes,external_context,implications}.json` → `rag/curate/*` 로더 → `chunking`(`parser_type`) | 정형 데이터와 구분되는 **사람 확정 해석 지식**을 지식청크로 인덱싱: **방법론 주석**(척도 변경 등 비교 유의) · **외부 맥락**(그해 사건) · **보고서 시사점**(각 연도 '요약·시사점/제언'의 정성적 결론, 2014~2025). advise 답변이 정량 수치에 이 지식을 융합해 *"OOOO년 보고서 시사점에 따르면~"*처럼 출처와 함께 인용(창작 금지 — 원문 근거·페이지 필수) | ✅ |
 | **🚦 신호등** | `rag/signals.py` + `ui/signal.py` | 연도 추세 신호(🟢상승/🟡보합/🔴하락). 의사결정용 **3단 분리** — 🟢설계 동일·크기 정상(바로 판단) · 🔶이례적 급변(>15%p, 검증 필요) · ⚠️개편·척도 변경(해석 유의). 집계·비응답·이진 상보 중복 제외. 단일 연도 문항은 그 해 스냅샷(파레토), '변곡점 × 외부 맥락' 패널 | ✅ |
 | **+ 앱/검증** | `app.py` 3모드 · `rag/curate/validate.py`(준비 게이트) · `rag/pipeline.py` · `tests/e2e`(Playwright) | **🚦 대시보드(랜딩)** · 💬 AI에게 묻기 · 🛠 데이터 준비(업로드→인제스트→검수→(게이트)→인덱싱 스텝퍼) + 🩺 시스템 로그 | ✅ |
 
