@@ -28,6 +28,7 @@ from pathlib import Path
 from rag.curate import corrections
 from rag.curate import methodology
 from rag.curate import external_context
+from rag.curate import implications
 from rag.transform import std_aliases
 try:
     import tiktoken
@@ -235,10 +236,52 @@ def build_external_context_chunks() -> list[dict]:
     return chunks
 
 
+def build_implication_chunks() -> list[dict]:
+    """ 큐레이션된 '보고서 시사점'(요약·시사점 절의 정성적 결론)을 지식청크로(parser_type='implication').
+        RAG(특히 advise)가 정량 수치 나열을 넘어 '당시 연구원의 정책적 결론'을 출처와 함께
+        인용하게 한다. 정형 사실 청크와 섞이지 않는다. 내용은 실제 보고서에서 사람이 확정해
+        curation/implications.json 에 넣는다(빈 목록이면 청크 0 — 파이프라인 무영향). """
+    chunks: list[dict] = []
+    for i, e in enumerate(implications.load_implications()):
+        implication = (e.get("implication") or "").strip()
+        year = str(e.get("year") or "").strip()
+        if not implication:
+            continue
+        std_id = (e.get("std_id") or "").strip()
+        related = (e.get("related_metric") or "").strip()
+        match = ", ".join(e.get("match", []))
+        source = (e.get("source") or "").strip()
+        text = f"[보고서 시사점 {year}] {implication}"
+        if related:
+            text += f"\n관련 수치: {related}"
+        if match:
+            text += f"\n관련 주제: {match}"
+        chunk_id = f"implication__{year}_{i}"
+        chunks.append({
+            "id": chunk_id,
+            "text": text,
+            "metadata": {
+                "chunk_id": chunk_id,
+                "year": year,
+                "std_id": std_id,
+                "std_label": (e.get("std_label") or implication[:60]),
+                "source": source or "보고서 시사점(큐레이션)",
+                "page": str(e.get("page") or "").strip(),
+                "parser_type": "implication",
+                "token_count": count_tokens(text),
+                "warning": "",
+                "n_responses": 0,
+            },
+        })
+    return chunks
+
+
 def build_all_chunks(rows: list[dict]) -> list[dict]:
-    """ 인덱스에 실제로 넣을 전체 청크 = 정형 사실 청크 + 방법론 지식청크 + 외부 맥락 지식청크.
+    """ 인덱스에 실제로 넣을 전체 청크 = 정형 사실 청크 + 방법론 지식청크 + 외부 맥락 지식청크
+        + 보고서 시사점 지식청크.
         (게이트 validate 는 사실 청크만 build_chunks 로 검사하므로 영향 없음.) """
-    return build_chunks(rows) + build_knowledge_chunks() + build_external_context_chunks()
+    return (build_chunks(rows) + build_knowledge_chunks()
+            + build_external_context_chunks() + build_implication_chunks())
 
 
 def save_chunks(chunks: list[dict]) -> Path:
