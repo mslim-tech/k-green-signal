@@ -27,11 +27,43 @@ PRIORITY_GROUPS = [
 ]
 
 
-def _trend_altair(series_list):
+@st.cache_data(show_spinner=False)
+def _question_by_std_year(csv_path: str, mtime: float) -> dict:
+    """ 소스 CSV → {(std_id, 연도문자열): 그해 원문 설문 문항 텍스트}. 1회 로드(캐시, mtime 키).
+        연도마다 설문 문항 표현이 달라지므로(그래서 std_id 로 통합), 차트 툴팁에 '당시 문항'을
+        곁들여 사용자가 척도·라벨 변화의 맥락을 hover 로 바로 보게 한다. question_summary(설명형)
+        우선, 없으면 subsection(보고서 문항 라벨) 폴백. (std_id 당 연도별 대표 1개.) """
+    import csv
+
+    out: dict[tuple[str, str], str] = {}
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
+        for r in csv.DictReader(f):
+            sid = (r.get("std_id") or "").strip()
+            y = (r.get("year") or "").strip()
+            if not sid or not y or (sid, y) in out:
+                continue
+            out[(sid, y)] = (r.get("question_summary") or r.get("subsection") or "").strip()
+    return out
+
+
+def _load_question_lookup() -> dict:
+    """ 차트 툴팁용 '당시 문항' 룩업. 소스 CSV(chunking.source_csv, 호출 시점 해석)를 mtime
+        키로 캐시해 읽는다. 파일이 없으면 빈 dict(툴팁에 문항 줄만 빠지고 차트는 정상). """
+    from pathlib import Path
+    p = chunking.source_csv()
+    try:
+        mt = Path(p).stat().st_mtime
+    except OSError:
+        return {}
+    return _question_by_std_year(str(p), mt)
+
+
+def _trend_altair(series_list, std_id: str | None = None, questions: dict | None = None):
     """ signals.Series 목록 → 연도별 추세 멀티라인 Altair 차트(없으면 None).
         연도축을 '순서형(범주)'으로 둬 등장 연도를 한 번씩 균등 배치한다(예전 정량축은
         2024·2025 사이에 눈금이 중복 표시되던 버그). 값이 없는 연도는 null 로 채워
-        선을 '끊어' 없는 구간을 직선으로 잇지 않는다(보간/추측 없음). 점은 값 있는 해에만. """
+        선을 '끊어' 없는 구간을 직선으로 잇지 않는다(보간/추측 없음). 점은 값 있는 해에만.
+        std_id·questions 를 주면 hover 툴팁에 '당시 문항'(그해 원문 설문 문항)을 얹는다. """
     import altair as alt
     import pandas as pd
 
@@ -43,13 +75,23 @@ def _trend_altair(series_list):
     for s in series_list:
         present = {p.year: p.value for p in s.points}
         for y in years:
+            # 그해 원문 문항(길면 툴팁이 과대해지지 않게 축약). std_id 당 연도별 대표 1개.
+            q = (questions or {}).get((std_id, str(y)), "") if std_id else ""
             recs.append({"연도": str(y), "값": present.get(y),
-                         "응답": s.label, "단위": s.unit or ""})
+                         "응답": s.label, "단위": s.unit or "",
+                         "문항": _shorten(q, 100)})
     df = pd.DataFrame(recs)
     order = [str(y) for y in years]
     # 범례는 최신값 큰 순으로(위 라인이 먼저), 라벨은 잘리지 않게(labelLimit=0).
     latest = {s.label: s.points[-1].value for s in series_list if s.points}
     legend_order = sorted(latest, key=lambda k: latest[k], reverse=True)
+    tooltip = [alt.Tooltip("응답:N", title="응답"),
+               alt.Tooltip("연도:O", title="연도"),
+               alt.Tooltip("값:Q", title="값"),
+               alt.Tooltip("단위:N", title="단위")]
+    # 원문 문항이 하나라도 있으면 툴팁에 '당시 문항' 줄을 더한다(전부 비면 줄을 넣지 않음).
+    if any(r["문항"] for r in recs):
+        tooltip.append(alt.Tooltip("문항:N", title="당시 문항"))
     chart = (
         alt.Chart(df)
         .mark_line(point=alt.OverlayMarkDef(size=45), strokeWidth=2.5)
@@ -60,10 +102,7 @@ def _trend_altair(series_list):
             color=alt.Color("응답:N", title="응답 항목", sort=legend_order,
                             legend=alt.Legend(orient="bottom", columns=1, labelLimit=0,
                                               symbolType="stroke")),
-            tooltip=[alt.Tooltip("응답:N", title="응답"),
-                     alt.Tooltip("연도:O", title="연도"),
-                     alt.Tooltip("값:Q", title="값"),
-                     alt.Tooltip("단위:N", title="단위")],
+            tooltip=tooltip,
         )
         .properties(height=320)
     )
@@ -99,7 +138,8 @@ def _render_indicator_card(ind, threshold, max_series: int = 5):
         caveat = INDICATOR_CAVEATS.get(ind.std_id)
         if caveat:
             st.caption(_md_escape(caveat))
-        chart = _trend_altair(top_series)
+        chart = _trend_altair(top_series, std_id=ind.std_id,
+                              questions=_load_question_lookup())
         if chart is not None:
             st.altair_chart(chart, width="stretch")
         for s in top_series:
