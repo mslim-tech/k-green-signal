@@ -309,17 +309,21 @@ def main() -> None:
         pass
 
     rows = load_rows()
+    # build_all_chunks 와 동일 구성(개별 카운트는 요약 출력용). 여기서 한 종류라도 빠지면
+    # 그 지식청크가 인덱스에서 통째로 누락되므로(index 는 이 chunks.jsonl 을 읽음) 반드시 일치시킨다.
     fact_chunks = build_chunks(rows)
     know_chunks = build_knowledge_chunks()
     ctx_chunks = build_external_context_chunks()
-    chunks = fact_chunks + know_chunks + ctx_chunks
+    impl_chunks = build_implication_chunks()
+    chunks = fact_chunks + know_chunks + ctx_chunks + impl_chunks
     path = save_chunks(chunks)
 
     n_tok = sum(c["metadata"]["token_count"] for c in chunks)
     empty = sum(1 for c in fact_chunks if c["metadata"]["n_responses"] == 0)
     print("\n" + "=" * 60)
     print(f"청킹 완료 — {len(chunks)} 청크 (사실 {len(fact_chunks)} + 방법론 지식 {len(know_chunks)} "
-          f"+ 외부 맥락 {len(ctx_chunks)}, {source_csv().name} 기준, corrections 반영)")
+          f"+ 외부 맥락 {len(ctx_chunks)} + 보고서 시사점 {len(impl_chunks)}, "
+          f"{source_csv().name} 기준, corrections 반영)")
     print(f"  총 토큰(대략): {n_tok:,} | 평균 {n_tok // max(1,len(chunks))}/청크")
     if empty:
         print(f"  ⚠️ 응답 줄이 0인 청크: {empty}개 (값이 다 빈 문항 — 검수 대상)")
