@@ -272,3 +272,92 @@ def main():
 - [ ] `--apply` 후 **기존 (year, std_id) 스냅샷 불변** 단언 통과
 - [ ] 검수·validate 후 게이트 통과 → 대시보드에 새 연도 시계열 표시
 - [ ] 비-LLM 단계는 `RAG_FAKE_LLM` 으로 스모크 가능(무과금 배선 검증)
+
+---
+
+## 부록: 보고서 시사점(implications) 추가 절차
+
+> 각 연도 결과보고서 '요약·시사점(Executive Summary)/제언' 절의 **정성적 결론**을 정량 수치와
+> 함께 인덱싱해, 챗봇(advise 모드)이 수치 나열을 넘어 "OOOO년 보고서 시사점에 따르면~"처럼
+> 당시 연구원의 정책적 진단을 출처와 함께 인용하도록 하는 지식 소스다.
+> `curation/methodology_notes.json`·`external_context.json` 과 같은 **큐레이션 지식 패턴**
+> (파일 단일 소스 → 로더 → `parser_type` 지식청크). 데이터(정형 CSV)와는 별개이며 정형
+> 파이프라인(std_id·게이트)과 무관하다 — 그래서 새 연도 추가와 독립적으로 갱신할 수 있다.
+
+### 🚨 원칙
+- **실제 보고서에 있는 문장만.** 요약·시사점/제언 절의 결론을 사람이 확인해 **원문 근거
+  (연도·페이지)와 함께** 넣는다. 지어내거나 창작하지 않는다("추측은 데이터가 아니다").
+- 확정 경로가 아니라 **큐레이션 지식**이므로 검수 큐·validate 게이트를 거치지 않는다.
+  대신 사람이 원문 대조로 직접 확정해 `curation/implications.json` 에 커밋한다.
+
+### 단계
+
+**1) 원본 보고서에서 '요약·시사점/제언' 절 찾기**
+Read 도구는 이 환경에서 PDF 렌더가 안 되므로(poppler 없음) PyMuPDF 로 텍스트를 뽑아 절을 찾는다.
+```bash
+uv run python -c "
+import fitz
+doc=fitz.open('data/2025년 ....pdf')
+for i in range(doc.page_count):
+    t=doc[i].get_text()
+    if any(k in t for k in ['시사점','제언','조사 결과 요약']):
+        print(i+1, [k for k in ['시사점','제언','조사 결과 요약'] if k in t])
+"
+```
+- 최근 보고서: '조사 결과 요약' 절(예: 2024·2025)에 "…으로 해석할 수 있음/판단됨/예상됨" 형태의
+  결론문이 있다. 2023 은 명시적 **'제언'** 절(보고서 p.33~35)이 있다.
+- 각 결론문의 **관련 수치**와 **보고서 인쇄 쪽번호**('N｜' 패턴)를 함께 확인한다.
+
+**2) `curation/implications.json` 의 `entries` 에 추가**
+스키마(파일 상단 `_schema` 참고): `year` · `match`(키워드) · `std_id`(선택, 지표 링크) ·
+`related_metric`(관련 수치) · `implication`(결론문, 원문 충실) · `source`(연도·보고서·절) · `page`.
+```json
+{
+  "year": 2025,
+  "match": ["녹색매장", "오프라인", "홍보"],
+  "std_id": "녹색매장_인지도",
+  "related_metric": "녹색매장 인지 수준 45.2%; 인지도 제고 '현판·안내판 표시 강화' 46.9%",
+  "implication": "녹색매장 인지 수준이 높지 않아 적극적 커뮤니케이션이 요구되며, 매장 내 표시 강화 등 오프라인 홍보 강화 의견이 많은 것으로 진단함.",
+  "source": "2025년 친환경생활·소비 국민 인지도 조사 결과보고서(조사 결과 요약)",
+  "page": "16"
+}
+```
+
+**3) 배선 검증(무과금)**
+```bash
+uv run python -c "
+from rag.curate import implications as I
+from rag.retrieval import chunking as C
+print('항목', len(I.load_implications()), '| 청크', len(C.build_implication_chunks()))
+"
+```
+
+**4) 재인덱싱 — 실 임베딩(과금)**
+```bash
+rm -rf outputs/chroma                        # 단일 컬렉션으로 깨끗이 재빌드(잔재 UUID 방지)
+uv run python -m rag.retrieval.chunking      # chunks.jsonl 에 시사점 포함(… + 보고서 시사점 N)
+uv run python -m rag.retrieval.index         # Chroma 재빌드
+```
+✔ `get_collection().get(where={'parser_type':'implication'})` 로 청크 수 확인.
+
+**5) 실제 질문으로 인용 검증**
+```bash
+uv run python -m rag.retrieval.answer --advise "녹색매장 오프라인 홍보 관련 과거 진단?"
+```
+✔ 답변에 `[출처: …(조사 결과 요약/제언) p.NN]` 인용이 뜨고, 근거 출처 상위에 `implication__…` 청크가 잡히면 성공.
+
+**6) 배포 반영(원하면)** — 본문 11단계와 동일 경로
+```bash
+cp outputs/chunks.jsonl samples/outputs/chunks.jsonl
+rm -rf samples/outputs/chroma && cp -r outputs/chroma samples/outputs/chroma
+printf 'full-2014-2025-rN' > samples/outputs/.dataset_version   # 스탬프 올림 → 클라우드 재전개
+git add curation/implications.json samples/outputs && git commit && git push
+```
+
+### 관련 코드(배선은 이미 완료)
+- `rag/curate/implications.py` — 로더(`external_context.py` 미러)
+- `rag/retrieval/chunking.py` — `build_implication_chunks()`(parser_type='implication'), `build_all_chunks()`·`main()` 에 연결
+- `rag/retrieval/answer.py` — `_advise_retrieve` 시사점 검색 축 + `ADVISE_SYSTEM_PROMPT` 규칙 7(인용 강제)
+- 출처 표시는 `ui/rag.py` 기존 expander 가 자동 처리
+> ⚠️ 과거에 `chunking.main()` 이 `build_all_chunks()` 를 안 써 시사점이 CLI 인덱싱에서 누락된
+> 버그가 있었다(수정됨). 새 지식 종류를 추가하면 `main()` 과 `build_all_chunks()` 를 반드시 함께 갱신한다.
