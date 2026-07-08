@@ -15,7 +15,7 @@ import streamlit as st
 import pypdf   # 1단계 업로드에서 페이지 수 표시용
 
 from rag import pipeline
-from ui.common import DATA_DIR, _data_pdfs
+from ui.common import DATA_DIR, _data_pdfs, is_cloud
 
 logger = logging.getLogger("app")
 
@@ -316,6 +316,21 @@ def render_step_ingest(ctx: dict) -> None:
         "선택한 PDF에서 수치를 추출하고 표준화·정제해 검수 큐까지 만듭니다. "
         "⚠️ 표준화 이후는 `outputs/*.extracted.jsonl` 전체를 다시 처리하므로 여러 연도가 있으면 시간이 걸립니다."
     )
+
+    # 배포(웹) 가드: 클라우드에서는 인제스트를 실행할 수 없다. 웹 작업 폴더는 재부팅 시
+    # 초기화되고, 인제스트의 표준화 단계는 기존 연도의 std_id 를 재배정해 데이터를 깨뜨린다.
+    # 새 연도 추가는 로컬 docs/ADD_YEAR.md 증분 절차로만 한다(위험한 '전체 실행'을 아예 렌더하지 않음).
+    if is_cloud():
+        st.warning(
+            "🔒 **웹(배포) 환경에서는 데이터 추가·인제스트를 실행할 수 없습니다.**\n\n"
+            "웹 작업 폴더는 재부팅 시 초기화되고, 전체 표준화는 기존 연도의 std_id 를 "
+            "깨뜨릴 수 있어 막아두었습니다. 새 연도 보고서는 **로컬에서 `docs/ADD_YEAR.md` "
+            "절차**(증분 통합)로 추가한 뒤 배포에 반영됩니다."
+        )
+        if st.button("🚦 대시보드로", key="cloud_ingest_to_dashboard"):
+            st.session_state.mode = "signal"
+            st.rerun()
+        return
 
     pdfs = _data_pdfs()
     if not pdfs:

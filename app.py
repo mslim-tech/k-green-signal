@@ -34,7 +34,7 @@ from ui.signal import render_step_signal
 # 검수 화면(3단계)은 모듈로 분리(ui/review.py).
 from ui.review import render_review_tab, load_review_queue
 # 공유 상수(검수 큐 경로) — build_ctx·_review_remaining_high 가 쓴다.
-from ui.common import REVIEW_QUEUE_PATH, _data_pdfs
+from ui.common import REVIEW_QUEUE_PATH, _data_pdfs, is_cloud
 # 단계 화면들은 모듈로 분리(ui/).
 from ui.rag import render_rag_tab
 from ui.ingest import render_step_upload, render_step_ingest, _ingest_recover
@@ -144,7 +144,7 @@ def _ensure_samples_bootstrapped():
     # Streamlit Community Cloud 는 앱을 /mount/src/<repo> 아래에 체크아웃한다. 그곳의
     # outputs/ 는 오직 bootstrap 이 만든 관리본이며 사람이 파일을 편집하지 않는다 →
     # 스탬프가 없으면 옛 배포본이므로 무조건 갱신해도 안전하다(로컬은 이 경로가 아님).
-    on_cloud = str(root).replace("\\", "/").startswith("/mount/src")
+    on_cloud = is_cloud()
 
     def _outputs_is_pristine() -> bool:
         # bootstrap 이 만든 그대로인가 — 즉 outputs/ 의 최상위 항목이 모두 레퍼런스에도
@@ -410,7 +410,8 @@ def main():
         render_stepper_nav(ctx, st.session_state.step)
         step = st.session_state.step
         # D2: 이 단계에서 '지금 할 일' 한 줄 안내(설명은 각 단계 화면 상단 caption 에).
-        if step in STEP_TODO:
+        # 단, 배포 웹의 인제스트(2)는 가드로 막혀 있어 '전체 실행' 안내가 모순되므로 숨긴다.
+        if step in STEP_TODO and not (is_cloud() and step == 2):
             st.info(f"👣 지금 할 일 — {STEP_TODO[step]}")
 
         if step in STEPS_NEED_KEY and api_key is None:
