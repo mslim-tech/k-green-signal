@@ -82,7 +82,12 @@ ADVISE_SYSTEM_PROMPT = (
     "(예: 그린워싱 적발 급증·가이드라인 발간 → 표시·광고 신뢰 하락의 개연적 맥락). 단 반드시 "
     "'상관·맥락일 뿐 인과가 아님'을 명시하고, 사건은 [출처: …]로 인용하라. 데이터 변화가 없거나 "
     "관련 사건이 없으면 억지로 엮지 말고 생략하라(설문 데이터 연도 밖 사건은 배경 설명으로만).\n"
-    "7. 한국어로 간결하되, 네 갈래를 형식적으로 채우지 말고 근거가 있는 것만 구체적으로."
+    "7. [근거]에 '[보고서 시사점 <연도>]'(그해 결과보고서 요약·시사점 절의 연구원 결론)이 "
+    "있으면, 정량 수치만 나열하지 말고 그 정성적 진단을 답변에 녹여 인용하라 — '<연도>년 보고서 "
+    "시사점에 따르면~' 또는 'OO페이지에 따르면~'처럼 출처와 함께. 외부 맥락(뉴스)과 달리 이는 "
+    "보고서 자체의 결론이므로 근거로 직접 인용할 수 있다(단 [근거]에 있는 시사점만 — 없으면 "
+    "지어내지 마라).\n"
+    "8. 한국어로 간결하되, 네 갈래를 형식적으로 채우지 말고 근거가 있는 것만 구체적으로."
 )
 
 
@@ -230,7 +235,9 @@ def _advise_retrieve(query: str, year: str | None, routed: str | None,
     """ '데이터 기반 제언'용 다면 검색 — 한 번의 유사도 검색으론 놓치는 축을 각각 모아 합친다.
         (1) 추세/사실   : 질문 그대로.
         (2) 장벽/개선   : 실천을 막는 이유·불편·개선 축(제언에 필요한 맥락).
-        (3) 방법론 주석 : 척도 변경 등 '비교 유의' 지식청크(유사도가 낮아도 반드시 포함). """
+        (3) 방법론 주석 : 척도 변경 등 '비교 유의' 지식청크(유사도가 낮아도 반드시 포함).
+        (4) 외부 맥락   : 그해 뉴스·사건(상황 대조).
+        (5) 보고서 시사점: 요약·시사점 절의 연구원 결론(정책적 진단을 함께 인용하게). """
     base = search(query, k=fetch, year=year, std_id=routed)
     if routed and not base:
         base = search(query, k=fetch, year=year)
@@ -241,7 +248,10 @@ def _advise_retrieve(query: str, year: str | None, routed: str | None,
     method = search(query, k=6, parser_type="methodology", rerank=False)
     # 외부 맥락(그해 뉴스·사건): 데이터 변화를 상황과 대조해 해석하게 한다(상관·인과 아님).
     context = search(query, k=6, parser_type="external_context", rerank=False)
-    return _merge_hits(base, barrier, method, context)
+    # 보고서 시사점(요약·시사점 절의 연구원 결론): 유사도 낮아도 종류로 좁혀 포함해
+    # 정량 수치에 '당시 정책적 진단'을 함께 인용하게 한다(빈 지식소스면 자연히 0건).
+    implication = search(query, k=6, parser_type="implication", rerank=False)
+    return _merge_hits(base, barrier, method, context, implication)
 
 
 def _build_context(hits: list[Hit]) -> str:
